@@ -13,11 +13,11 @@ datastores:
   cmdp_sql:
     dsn: "Server=cmdp_db_uat;Database=CMDP;Integrated Security=SSPI;TrustServerCertificate=True;Max Pool Size=20;"
   mapping_sql:
-    dsn: "Server=axso-nonprod-appl-mds-dev-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-np-mds-dev-transactionaldataoutbound-sqldb;"
+    dsn: "Server=axso-nonprod-appl-mds-dev-sqlserver.database.windows.net;Database=axso-np-mds-dev-transactionaldataoutbound-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;"
   mds_sql:
-    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;"
+    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;"
   mesap_mapping_sql:
-    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;"
+    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;"
   redis:
     address: "NOT SET"
     tls: true
