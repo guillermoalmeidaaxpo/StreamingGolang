@@ -3,6 +3,7 @@ package authz
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -36,8 +37,12 @@ type HttpLicenseValidator struct {
 }
 
 func NewHttpLicenseValidator(baseURL, path string, timeout time.Duration) *HttpLicenseValidator {
+	// For dev environments pointing to internal Axpo servers, skip TLS verification if needed
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	return &HttpLicenseValidator{
-		client:  &http.Client{Timeout: timeout},
+		client:  &http.Client{Timeout: timeout, Transport: tr},
 		baseURL: baseURL,
 		path:    path,
 	}
