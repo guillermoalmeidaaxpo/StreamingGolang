@@ -1,0 +1,102 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "generic.schema.json",
+  "title": "Generic request",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "Id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "ids": { "$ref": "#/definitions/ids" },
+    "Ids": { "$ref": "#/definitions/ids" },
+    "versionAsOf": { "type": "string", "format": "date-time" },
+    "VersionAsOf": { "type": "string", "format": "date-time" },
+    "filters": { "$ref": "#/definitions/filters" },
+    "Filters": { "$ref": "#/definitions/filters" },
+    "transformations": { "$ref": "#/definitions/transformations" },
+    "Transformations": { "$ref": "#/definitions/transformations" },
+    "columns": { "$ref": "#/definitions/columns" },
+    "Columns": { "$ref": "#/definitions/columns" },
+    "includeDeleted": { "type": "boolean" },
+    "IncludeDeleted": { "type": "boolean" }
+  },
+  "anyOf": [
+    { "required": ["id"] },
+    { "required": ["Id"] },
+    { "required": ["ids"] },
+    { "required": ["Ids"] }
+  ],
+  "definitions": {
+    "ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "columns": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "filters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "expressions": { "$ref": "#/definitions/expressions" },
+        "Expressions": { "$ref": "#/definitions/expressions" },
+        "filterTimeZone": { "type": "string" },
+        "FilterTimeZone": { "type": "string" },
+        "shape": {},
+        "Shape": {}
+      }
+    },
+    "expressions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "transformations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timezone": { "type": "string" },
+        "Timezone": { "type": "string" },
+        "targetTimeZone": { "type": "string" },
+        "TargetTimeZone": { "type": "string" },
+        "offset": { "type": "boolean" },
+        "Offset": { "type": "boolean" },
+        "nested": {
+          "type": "string",
+          "enum": ["yes", "no"]
+        },
+        "Nested": {
+          "type": "string",
+          "enum": ["yes", "no"]
+        },
+        "keys": { "$ref": "#/definitions/keys" },
+        "Keys": { "$ref": "#/definitions/keys" },
+        "values": { "$ref": "#/definitions/values" },
+        "Values": { "$ref": "#/definitions/values" }
+      }
+    },
+    "keys": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": { "type": "string" }
+      }
+    }
+  }
+}

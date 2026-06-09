@@ -1,0 +1,307 @@
+package mssql
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+
+	"streaming-golang/internal/app/apperr"
+	"streaming-golang/internal/domain"
+)
+
+type MappingResolver struct {
+	cmdpMappingDB *sql.DB
+	mdsDB         *sql.DB
+}
+
+func NewMappingResolver(cmdpMappingDB, mdsDB *sql.DB) *MappingResolver {
+	return &MappingResolver{
+		cmdpMappingDB: cmdpMappingDB,
+		mdsDB:         mdsDB,
+	}
+}
+
+func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Identifier, category domain.DataCategory, stage string) ([]domain.Mapping, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if r == nil || r.cmdpMappingDB == nil {
+		return nil, apperr.New(apperr.Unavailable, "mapping database is not configured")
+	}
+
+	if usesMDSMappings(stage) {
+		return r.readMDSDomainMappings(ctx, ids, category)
+	}
+
+	rows, err := r.readCMDPMappings(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, apperr.New(apperr.NotFound, "requested identifiers do not have mappings")
+	}
+
+	cmdpMappings := buildDomainMappings(rows, category)
+	if usesMigrationMappings(stage) {
+		return r.processMigrationMappings(ctx, cmdpMappings, category)
+	}
+	return r.processRegularMappings(ctx, cmdpMappings, category)
+}
+
+func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Identifier) ([]mappingRow, error) {
+	query, args := mappingQuery(ids)
+	rows, err := r.cmdpMappingDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "read CMDP mappings", err)
+	}
+	defer rows.Close()
+
+	result := make([]mappingRow, 0)
+	for rows.Next() {
+		row, err := scanMappingRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "iterate CMDP mappings", err)
+	}
+
+	return result, nil
+}
+
+func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domain.Identifier, category domain.DataCategory) ([]domain.Mapping, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if r.mdsDB == nil {
+		return nil, apperr.New(apperr.Unavailable, "MDS mapping database is not configured")
+	}
+
+	query, args := mdsMappingQuery(ids)
+	rows, err := r.mdsDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "read MDS mappings", err)
+	}
+	defer rows.Close()
+
+	result := make([]mappingRow, 0)
+	for rows.Next() {
+		row, err := scanMDSMappingRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, apperr.Wrap(apperr.Unavailable, "iterate MDS mappings", err)
+	}
+	if len(result) == 0 {
+		return nil, apperr.New(apperr.NotFound, "requested identifiers do not have MDS mappings")
+	}
+
+	return buildDomainMappings(result, category), nil
+}
+
+func (r *MappingResolver) processRegularMappings(ctx context.Context, cmdpMappings []domain.Mapping, category domain.DataCategory) ([]domain.Mapping, error) {
+	groups := groupBySwitchover(cmdpMappings)
+	mdsIDs := make([]domain.Identifier, 0)
+
+	for _, mapping := range groups.MDSSwitchover {
+		mdsIDs = append(mdsIDs, hyperscaleOrOwnID(mapping))
+	}
+
+	hyperscaleMDOIDs := make(map[domain.Identifier]struct{})
+	for _, mapping := range groups.NoSwitchover {
+		if mapping.HyperscaleID != nil {
+			hyperscaleMDOIDs[mapping.ID] = struct{}{}
+			mdsIDs = append(mdsIDs, mapping.ID)
+		}
+	}
+
+	result := make([]domain.Mapping, 0, len(cmdpMappings))
+	if len(mdsIDs) > 0 {
+		mdsMappings, err := r.readMDSDomainMappings(ctx, distinctIdentifiers(mdsIDs), category)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, enrichMDSMappings(mdsMappings, groups.MDSSwitchover)...)
+	}
+
+	for _, mapping := range groups.CMDPSwitchover {
+		result = append(result, forceCMDP(mapping))
+	}
+	for _, mapping := range groups.NoSwitchover {
+		if _, isHyperscale := hyperscaleMDOIDs[mapping.ID]; !isHyperscale {
+			result = append(result, mapping)
+		}
+	}
+
+	return result, nil
+}
+
+func (r *MappingResolver) processMigrationMappings(ctx context.Context, cmdpMappings []domain.Mapping, category domain.DataCategory) ([]domain.Mapping, error) {
+	groups := groupBySwitchover(cmdpMappings)
+	mdsIDs := make([]domain.Identifier, 0)
+
+	for _, mapping := range groups.CMDPSwitchover {
+		mdsIDs = append(mdsIDs, hyperscaleOrOwnID(mapping))
+	}
+	for _, mapping := range groups.NoSwitchover {
+		mdsIDs = append(mdsIDs, mapping.ID)
+	}
+
+	result := make([]domain.Mapping, 0, len(cmdpMappings))
+	if len(mdsIDs) > 0 {
+		mdsMappings, err := r.readMDSDomainMappings(ctx, distinctIdentifiers(mdsIDs), category)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, enrichMDSMappings(mdsMappings, groups.CMDPSwitchover)...)
+	}
+
+	for _, mapping := range groups.MDSSwitchover {
+		result = append(result, forceCMDP(mapping))
+	}
+
+	return result, nil
+}
+
+func mappingQuery(ids []domain.Identifier) (string, []any) {
+	placeholders := make([]string, 0, len(ids))
+	args := make([]any, 0, len(ids))
+	for index, id := range ids {
+		placeholders = append(placeholders, fmt.Sprintf("@p%d", index+1))
+		args = append(args, int64(id))
+	}
+
+	return fmt.Sprintf(`
+SELECT
+	TIMESERIES_ID,
+	CMDP_VIEW_NAME,
+	MDS_DATA_CATEGORY,
+	MDS_DATA_STRUCTURE,
+	RESOLUTION,
+	CMDP_COLUMN_NAME,
+	MDS_COLUMN_NAME,
+	DATA_TYPE,
+	IS_PROJECTABLE,
+	IS_KEY,
+	ORDER_PRIORITY,
+	KEY_COLUMN_ORDERING,
+	VALUE_COLUMN_ORDERING,
+	CASSANDRA_ID,
+	HYPERSCALE_ID,
+	SPLIT_QUERY,
+	CMDP_COLUMN_INDEXED,
+	SWITCHOVER
+FROM CMDP_TO_MDS_MAPPING
+WHERE TIMESERIES_ID IN (%s)`, strings.Join(placeholders, ",")), args
+}
+
+func buildDomainMappings(rows []mappingRow, fallbackCategory domain.DataCategory) []domain.Mapping {
+	byID := make(map[domain.Identifier][]mappingRow)
+	order := make([]domain.Identifier, 0)
+	for _, row := range rows {
+		id := domain.Identifier(row.TimeSeriesID)
+		if _, exists := byID[id]; !exists {
+			order = append(order, id)
+		}
+		byID[id] = append(byID[id], row)
+	}
+
+	mappings := make([]domain.Mapping, 0, len(byID))
+	for _, id := range order {
+		group := byID[id]
+		first := group[0]
+		category := parseDataCategory(first.MDSDataCategory, fallbackCategory)
+		mapping := domain.Mapping{
+			ID:           id,
+			DataCategory: category,
+			Source:       sourceKind(first),
+			ViewName:     first.CMDPViewName.String,
+			IndexField:   first.IndexField.String,
+			Resolution:   first.Resolution.String,
+			CassandraID:  first.CassandraID.String,
+			SwitchOver:   first.SwitchOver.String,
+			SplitQuery:   boolValue(first.SplitQuery, true),
+			Timezone:     first.Timezone.String,
+			Columns:      make([]domain.ColumnMapping, 0, len(group)),
+		}
+		if first.HyperscaleID.Valid {
+			hyperscaleID := domain.Identifier(first.HyperscaleID.Int64)
+			mapping.HyperscaleID = &hyperscaleID
+		}
+
+		for _, row := range group {
+			mapping.Columns = append(mapping.Columns, domain.ColumnMapping{
+				MDSName:             row.MDSColumnName,
+				SourceName:          row.CMDPColumnName,
+				DataType:            row.DataType,
+				IsKey:               row.IsKey.Bool,
+				IsProjectable:       boolValue(row.IsProjectable, false),
+				OrderPriority:       nullableInt(row.OrderPriority),
+				KeyColumnOrdering:   nullableInt(row.KeyColumnOrdering),
+				ValueColumnOrdering: nullableInt(row.ValueColumnOrdering),
+			})
+		}
+		mappings = append(mappings, mapping)
+	}
+
+	return mappings
+}
+
+func parseDataCategory(value string, fallback domain.DataCategory) domain.DataCategory {
+	switch strings.ToLower(value) {
+	case "curve", "curves":
+		return domain.Curves
+	case "surface", "surfaces":
+		return domain.Surfaces
+	case "timeseries", "time_series", "time series":
+		return domain.TimeSeries
+	default:
+		return fallback
+	}
+}
+
+func sourceKind(row mappingRow) domain.SourceKind {
+	if row.CassandraID.Valid && row.CassandraID.String != "" {
+		return domain.SourceCassandra
+	}
+	if row.HyperscaleID.Valid {
+		return domain.SourceHyperscale
+	}
+	if strings.HasPrefix(strings.ToLower(row.SwitchOver.String), "mds") {
+		return domain.SourceHyperscale
+	}
+	return domain.SourceCMDP
+}
+
+func usesMDSMappings(stage string) bool {
+	stage = strings.ToLower(stage)
+	return strings.Contains(stage, "design") || strings.Contains(stage, "validation")
+}
+
+func usesMigrationMappings(stage string) bool {
+	return strings.Contains(strings.ToLower(stage), "migration")
+}
+
+func boolValue(value sql.NullBool, fallback bool) bool {
+	if !value.Valid {
+		return fallback
+	}
+	return value.Bool
+}
+
+func nullableInt(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	result := int(value.Int64)
+	return &result
+}
+
+var errNilScanner = errors.New("nil scanner")

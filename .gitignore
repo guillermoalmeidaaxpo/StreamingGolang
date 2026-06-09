@@ -1,0 +1,29 @@
+# Binaries
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Config/Secrets
+# Ignore environment specific configs, but keep default.yaml
+/configs/development.yaml
+/configs/productive.yaml
+.env
+.env.local
+
+# Dependency directories
+/vendor/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
