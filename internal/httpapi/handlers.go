@@ -29,7 +29,7 @@ func (h handlers) info(w http.ResponseWriter, _ *http.Request) {
 func (h handlers) transactional(w http.ResponseWriter, r *http.Request) {
 	var req []transactional.Request
 	if err := decodeSchemaJSON(r.Body, transactionalRequestSchema, &req); err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", "Invalid or empty transactional data body.")
+		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", invalidRequestBodyDetail("Invalid or empty transactional data body.", err))
 		return
 	}
 
@@ -46,7 +46,7 @@ func (h handlers) transactional(w http.ResponseWriter, r *http.Request) {
 func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 	var req []transactional.Request
 	if err := decodeSchemaJSON(r.Body, transactionalRequestSchema, &req); err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", "Invalid or empty transactional stream body.")
+		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", invalidRequestBodyDetail("Invalid or empty transactional stream body.", err))
 		return
 	}
 
@@ -182,8 +182,15 @@ func genericRequestContext(path string, mode transactional.ResponseMode, fallbac
 func decodeGenericRequest(w http.ResponseWriter, r *http.Request, detail string) (transactional.Request, bool) {
 	var request genericRequest
 	if err := decodeSchemaJSON(r.Body, genericRequestSchema, &request); err != nil {
-		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", detail)
+		writeProblem(w, r, http.StatusBadRequest, "invalid-request-body", invalidRequestBodyDetail(detail, err))
 		return transactional.Request{}, false
 	}
 	return request.toTransactionalRequest(), true
+}
+
+func invalidRequestBodyDetail(prefix string, err error) string {
+	if err == nil {
+		return prefix
+	}
+	return prefix + " " + err.Error()
 }
