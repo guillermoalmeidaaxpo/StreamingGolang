@@ -57,7 +57,7 @@ func main() {
 		if mdsDB != nil {
 			defer mdsDB.Close()
 		}
-		mappingResolver = mssql.NewMappingResolver(cmdpMappingDB, mdsDB)
+		mappingResolver = mssql.NewMappingResolver(cmdpMappingDB, mdsDB, logger)
 		queryBuilder = mssql.NewCMDPQueryBuilder()
 	}
 

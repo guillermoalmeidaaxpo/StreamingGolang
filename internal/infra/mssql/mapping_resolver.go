@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
@@ -14,12 +16,17 @@ import (
 type MappingResolver struct {
 	cmdpMappingDB *sql.DB
 	mdsDB         *sql.DB
+	logger        *slog.Logger
 }
 
-func NewMappingResolver(cmdpMappingDB, mdsDB *sql.DB) *MappingResolver {
+func NewMappingResolver(cmdpMappingDB, mdsDB *sql.DB, logger *slog.Logger) *MappingResolver {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &MappingResolver{
 		cmdpMappingDB: cmdpMappingDB,
 		mdsDB:         mdsDB,
+		logger:        logger,
 	}
 }
 
@@ -31,6 +38,13 @@ func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Iden
 		return nil, apperr.New(apperr.Unavailable, "mapping database is not configured")
 	}
 
+	logger := r.resolverLogger()
+	logger.InfoContext(ctx, "resolving data mappings",
+		slog.Any("identifiers", ids),
+		slog.String("data_category", string(category)),
+		slog.String("stage", stage),
+	)
+
 	if usesMDSMappings(stage) {
 		return r.readMDSDomainMappings(ctx, ids, category)
 	}
@@ -40,6 +54,11 @@ func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Iden
 		return nil, err
 	}
 	if len(rows) == 0 {
+		logger.WarnContext(ctx, "no CMDP mappings found",
+			slog.Any("identifiers", ids),
+			slog.String("data_category", string(category)),
+			slog.String("stage", stage),
+		)
 		return nil, apperr.New(apperr.NotFound, "requested identifiers do not have mappings")
 	}
 
@@ -52,8 +71,23 @@ func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Iden
 
 func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Identifier) ([]mappingRow, error) {
 	query, args := mappingQuery(ids)
+	logger := r.resolverLogger()
+	start := time.Now()
+	logger.InfoContext(ctx, "reading CMDP mappings",
+		slog.Any("identifiers", ids),
+		slog.Int("parameter_count", len(args)),
+		slog.String("query", compactSQL(query)),
+	)
+
 	rows, err := r.cmdpMappingDB.QueryContext(ctx, query, args...)
 	if err != nil {
+		logger.ErrorContext(ctx, "read CMDP mappings failed",
+			slog.Any("identifiers", ids),
+			slog.Int("parameter_count", len(args)),
+			slog.String("query", compactSQL(query)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "read CMDP mappings", err)
 	}
 	defer rows.Close()
@@ -67,9 +101,20 @@ func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Ide
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
+		logger.ErrorContext(ctx, "iterate CMDP mappings failed",
+			slog.Any("identifiers", ids),
+			slog.Int("row_count", len(result)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "iterate CMDP mappings", err)
 	}
 
+	logger.InfoContext(ctx, "CMDP mappings read",
+		slog.Any("identifiers", ids),
+		slog.Int("row_count", len(result)),
+		slog.Duration("duration", time.Since(start)),
+	)
 	return result, nil
 }
 
@@ -82,8 +127,25 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 	}
 
 	query, args := mdsMappingQuery(ids)
+	logger := r.resolverLogger()
+	start := time.Now()
+	logger.InfoContext(ctx, "reading MDS mappings",
+		slog.Any("identifiers", ids),
+		slog.String("data_category", string(category)),
+		slog.Int("parameter_count", len(args)),
+		slog.String("query", compactSQL(query)),
+	)
+
 	rows, err := r.mdsDB.QueryContext(ctx, query, args...)
 	if err != nil {
+		logger.ErrorContext(ctx, "read MDS mappings failed",
+			slog.Any("identifiers", ids),
+			slog.String("data_category", string(category)),
+			slog.Int("parameter_count", len(args)),
+			slog.String("query", compactSQL(query)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "read MDS mappings", err)
 	}
 	defer rows.Close()
@@ -97,12 +159,30 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 		result = append(result, row)
 	}
 	if err := rows.Err(); err != nil {
+		logger.ErrorContext(ctx, "iterate MDS mappings failed",
+			slog.Any("identifiers", ids),
+			slog.String("data_category", string(category)),
+			slog.Int("row_count", len(result)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "iterate MDS mappings", err)
 	}
 	if len(result) == 0 {
+		logger.WarnContext(ctx, "no MDS mappings found",
+			slog.Any("identifiers", ids),
+			slog.String("data_category", string(category)),
+			slog.Duration("duration", time.Since(start)),
+		)
 		return nil, apperr.New(apperr.NotFound, "requested identifiers do not have MDS mappings")
 	}
 
+	logger.InfoContext(ctx, "MDS mappings read",
+		slog.Any("identifiers", ids),
+		slog.String("data_category", string(category)),
+		slog.Int("row_count", len(result)),
+		slog.Duration("duration", time.Since(start)),
+	)
 	return buildDomainMappings(result, category), nil
 }
 
@@ -305,3 +385,14 @@ func nullableInt(value sql.NullInt64) *int {
 }
 
 var errNilScanner = errors.New("nil scanner")
+
+func (r *MappingResolver) resolverLogger() *slog.Logger {
+	if r == nil || r.logger == nil {
+		return slog.Default()
+	}
+	return r.logger
+}
+
+func compactSQL(query string) string {
+	return strings.Join(strings.Fields(query), " ")
+}
