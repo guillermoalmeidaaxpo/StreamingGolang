@@ -2,6 +2,7 @@ package cassandra
 
 import (
 	"context"
+	"sync"
 
 	"github.com/gocql/gocql"
 
@@ -20,7 +21,7 @@ func NewRepository(session *gocql.Session) transactional.Repository {
 
 func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) ([]transactional.DataItem, error) {
 	iter := r.session.Query(query.Statement).Bind(query.Arguments...).WithContext(ctx).Iter()
-	
+
 	items := make([]transactional.DataItem, 0)
 	for {
 		row := make(map[string]any)
@@ -42,7 +43,7 @@ func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) 
 
 func (r *repository) Stream(ctx context.Context, query domain.ExecutableQuery) (transactional.Stream, error) {
 	iter := r.session.Query(query.Statement).Bind(query.Arguments...).WithContext(ctx).Iter()
-	
+
 	return &cassandraStream{
 		ctx:  ctx,
 		iter: iter,
@@ -51,11 +52,13 @@ func (r *repository) Stream(ctx context.Context, query domain.ExecutableQuery) (
 }
 
 type cassandraStream struct {
-	ctx  context.Context
-	iter *gocql.Iter
-	id   domain.Identifier
-	item transactional.DataItem
-	err  error
+	ctx       context.Context
+	iter      *gocql.Iter
+	id        domain.Identifier
+	item      transactional.DataItem
+	err       error
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (s *cassandraStream) Next(ctx context.Context) bool {
@@ -80,9 +83,19 @@ func (s *cassandraStream) Item() transactional.DataItem {
 }
 
 func (s *cassandraStream) Err() error {
-	return s.iter.Close()
+	if s.err != nil {
+		return s.err
+	}
+	return s.close()
 }
 
 func (s *cassandraStream) Close() error {
-	return s.iter.Close()
+	return s.close()
+}
+
+func (s *cassandraStream) close() error {
+	s.closeOnce.Do(func() {
+		s.closeErr = s.iter.Close()
+	})
+	return s.closeErr
 }

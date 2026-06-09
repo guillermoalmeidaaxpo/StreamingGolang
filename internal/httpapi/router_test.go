@@ -21,7 +21,6 @@ func TestHealthEndpoint(t *testing.T) {
 			transactional.NewPlanner(),
 			transactional.NewExecutor(nil, 0),
 		),
-
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/health/liveness", nil)

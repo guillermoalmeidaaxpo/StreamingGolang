@@ -28,7 +28,7 @@ func Open(cfg config.Cassandra) (*gocql.Session, error) {
 	cluster.Timeout = cfg.ReadTimeout
 	cluster.ConnectTimeout = cfg.ConnectionTimeout
 	cluster.NumConns = cfg.LocalConnections
-	
+
 	if cfg.PrimaryDataCenter != "" {
 		cluster.PoolConfig.HostSelectionPolicy = gocql.DCAwareRoundRobinPolicy(cfg.PrimaryDataCenter)
 	}

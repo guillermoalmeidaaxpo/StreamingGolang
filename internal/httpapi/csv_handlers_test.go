@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"streaming-golang/internal/app/transactional"
+	"streaming-golang/internal/domain"
 	"streaming-golang/internal/platform/config"
 	antlrparser "streaming-golang/internal/query/parser/antlr"
 )
@@ -141,8 +143,59 @@ func newCSVTestRouter() http.Handler {
 			transactional.NewValidator(),
 			antlrparser.New(),
 			transactional.NewPlanner(),
-			transactional.NewExecutor(nil, 0),
+			transactional.NewExecutor(map[domain.SourceKind]transactional.Repository{
+				domain.SourceCMDP: csvTestRepository{},
+			}, 0),
 		),
-
 	})
+}
+
+type csvTestRepository struct{}
+
+func (csvTestRepository) Execute(_ context.Context, query domain.ExecutableQuery) ([]transactional.DataItem, error) {
+	return []transactional.DataItem{{
+		ID: query.ID,
+		Fields: map[string]any{
+			"status":         "planned",
+			"source":         query.Source,
+			"dataCategory":   query.DataCategory,
+			"statement":      query.Statement,
+			"parameterCount": len(query.Parameters),
+		},
+	}}, nil
+}
+
+func (r csvTestRepository) Stream(ctx context.Context, query domain.ExecutableQuery) (transactional.Stream, error) {
+	items, err := r.Execute(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &csvTestStream{items: items}, nil
+}
+
+type csvTestStream struct {
+	items []transactional.DataItem
+	index int
+	item  transactional.DataItem
+}
+
+func (s *csvTestStream) Next(ctx context.Context) bool {
+	if ctx.Err() != nil || s.index >= len(s.items) {
+		return false
+	}
+	s.item = s.items[s.index]
+	s.index++
+	return true
+}
+
+func (s *csvTestStream) Item() transactional.DataItem {
+	return s.item
+}
+
+func (s *csvTestStream) Err() error {
+	return nil
+}
+
+func (s *csvTestStream) Close() error {
+	return nil
 }

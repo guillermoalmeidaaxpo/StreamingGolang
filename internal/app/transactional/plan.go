@@ -2,7 +2,9 @@ package transactional
 
 import (
 	"context"
+	"fmt"
 
+	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
 )
 
@@ -122,6 +124,9 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 			built, err := p.queryBuilder.BuildQueries(ctx, splitCommand)
 			if err != nil {
 				return Plan{}, err
+			}
+			if len(built) == 0 {
+				return Plan{}, apperr.New(apperr.Unavailable, fmt.Sprintf("no query builder produced a query for source %q", splitCommand.Source))
 			}
 			steps = append(steps, PlanStep{
 				Command: splitCommand,

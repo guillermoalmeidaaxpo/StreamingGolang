@@ -110,6 +110,7 @@ func main() {
 
 	httpLicenseValidator := authz.NewHttpLicenseValidator(
 		cfg.AuthorizationAPI.BaseURL,
+		cfg.AuthorizationAPI.Endpoint,
 		cfg.AuthorizationAPI.UniverseEndpoint,
 		cfg.AuthorizationAPI.Timeout,
 	)

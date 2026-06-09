@@ -8,7 +8,9 @@ import (
 )
 
 func TestPipelineExecutePlansRequestedIDs(t *testing.T) {
-	pipeline := NewPipeline(NewValidator(), testFilterParser{}, NewPlanner(), NewExecutor(nil, 0))
+	pipeline := NewPipeline(NewValidator(), testFilterParser{}, NewPlanner(), NewExecutor(map[domain.SourceKind]Repository{
+		domain.SourceCMDP: testRepository{},
+	}, 0))
 
 	response, err := pipeline.Execute(context.Background(), RequestContext{
 		DataCategory: domain.TimeSeries,
@@ -32,4 +34,27 @@ type testFilterParser struct{}
 
 func (testFilterParser) Parse(_ context.Context, expressions []string) (FilterSet, error) {
 	return FilterSet{Expressions: expressions}, nil
+}
+
+type testRepository struct{}
+
+func (testRepository) Execute(_ context.Context, query domain.ExecutableQuery) ([]DataItem, error) {
+	return []DataItem{{
+		ID: query.ID,
+		Fields: map[string]any{
+			"status":         "planned",
+			"source":         query.Source,
+			"dataCategory":   query.DataCategory,
+			"statement":      query.Statement,
+			"parameterCount": len(query.Parameters),
+		},
+	}}, nil
+}
+
+func (r testRepository) Stream(ctx context.Context, query domain.ExecutableQuery) (Stream, error) {
+	items, err := r.Execute(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &sliceStream{items: items}, nil
 }

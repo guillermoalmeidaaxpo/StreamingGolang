@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"streaming-golang/internal/app/apperr"
-	"streaming-golang/internal/platform/auth"
 )
 
 type LicenseValidator interface {
@@ -228,10 +227,10 @@ func (v *AllowedUserLicenseValidator) ValidateReadAccess(ctx context.Context, re
 		}
 
 		userID := strings.ToLower(strings.TrimSpace(principal.Subject))
-
+		
 		// 1. Check static list from config
 		_, staticallyAllowed := v.allowedUsersInCache[userID]
-
+		
 		// 2. Check Redis cache
 		dynamicallyAllowed := false
 		if !staticallyAllowed && v.checker != nil {

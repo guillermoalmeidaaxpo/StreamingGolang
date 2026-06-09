@@ -2,10 +2,12 @@ package transactional
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"golang.org/x/sync/errgroup"
 
+	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
 )
 
@@ -25,6 +27,9 @@ type executor struct {
 func NewExecutor(repositories map[domain.SourceKind]Repository, maxParallel int) Executor {
 	if maxParallel <= 0 {
 		maxParallel = 1
+	}
+	if repositories == nil {
+		repositories = map[domain.SourceKind]Repository{}
 	}
 	return &executor{
 		repositories: repositories,
@@ -70,7 +75,7 @@ func (e *executor) executeStep(ctx context.Context, step PlanStep) ([]DataItem, 
 
 			repo, ok := e.repositories[q.Source]
 			if !ok {
-				return nil
+				return missingRepositoryError(q.Source)
 			}
 
 			items, err := repo.Execute(gCtx, q)
@@ -97,8 +102,13 @@ func (e *executor) executeStep(ctx context.Context, step PlanStep) ([]DataItem, 
 
 func requestedIDs(plan Plan) []domain.Identifier {
 	ids := make([]domain.Identifier, 0)
+	seen := make(map[domain.Identifier]struct{})
 	for _, step := range plan.Steps {
 		for _, id := range step.Command.IDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
 			ids = append(ids, id)
 		}
 	}
@@ -116,9 +126,9 @@ func (e *executor) Stream(ctx context.Context, plan Plan) (Stream, error) {
 		query := step.Queries[0]
 		repo, ok := e.repositories[query.Source]
 		if !ok {
-			return &sliceStream{}, nil
+			return nil, missingRepositoryError(query.Source)
 		}
-		
+
 		// If no transformation is needed, use direct stream
 		if step.Command.TargetTimeZone == "" && !step.Command.HasAggregations {
 			return repo.Stream(ctx, query)
@@ -148,16 +158,17 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 
 	go func() {
 		defer close(s.results)
-		
+
 		for _, step := range plan.Steps {
 			group, gCtx := errgroup.WithContext(mCtx)
 			semaphore := make(chan struct{}, e.maxParallel)
 			stepResults := make(chan DataItem, 100)
+			transformDone := make(chan struct{})
 
 			group.Go(func() error {
 				defer close(stepResults)
 				innerGroup, innerGCtx := errgroup.WithContext(gCtx)
-				
+
 				for _, query := range step.Queries {
 					q := query
 					innerGroup.Go(func() error {
@@ -170,7 +181,7 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 
 						repo, ok := e.repositories[q.Source]
 						if !ok {
-							return nil
+							return missingRepositoryError(q.Source)
 						}
 
 						stream, err := repo.Stream(innerGCtx, q)
@@ -196,6 +207,7 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 			// For streaming, we apply per-item if possible, but aggregations might need buffering
 			// For now, assume per-item (like TimeZone)
 			go func() {
+				defer close(transformDone)
 				for item := range stepResults {
 					transformed := e.transformer.processItem(item, step.Command, nil) // Location will be re-loaded inside if needed, or we can optimize
 					select {
@@ -208,8 +220,11 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 
 			if err := group.Wait(); err != nil {
 				s.err = err
+				s.cancel()
+				<-transformDone
 				return
 			}
+			<-transformDone
 		}
 	}()
 
@@ -270,4 +285,8 @@ func (s *sliceStream) Err() error {
 
 func (s *sliceStream) Close() error {
 	return nil
+}
+
+func missingRepositoryError(source domain.SourceKind) error {
+	return apperr.New(apperr.Unavailable, fmt.Sprintf("no repository configured for source %q", source))
 }

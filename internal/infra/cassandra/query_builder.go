@@ -68,7 +68,7 @@ func (b *CassandraQueryBuilder) buildStatement(table string, mapping domain.Mapp
 
 	arguments := []any{mapping.CassandraID}
 	where := []string{"id = ?"}
-	
+
 	if len(command.QuoteIndices) > 0 {
 		arguments = append(arguments, command.QuoteIndices)
 		where = append(where, "quote_date_index IN ?")

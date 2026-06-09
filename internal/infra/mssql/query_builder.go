@@ -48,7 +48,7 @@ func (CMDPQueryBuilder) BuildQueries(_ context.Context, command domain.Command) 
 	}
 
 	if len(queries) == 0 {
-		return nil, apperr.New(apperr.Invalid, "command has no CMDP mappings")
+		return nil, nil
 	}
 	return queries, nil
 }
