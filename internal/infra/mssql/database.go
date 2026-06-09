@@ -12,17 +12,54 @@ func OpenSQLServer(dsn string) (*sql.DB, error) {
 	if !IsConfiguredDSN(dsn) {
 		return nil, nil
 	}
-	driverName := "sqlserver"
-	if usesAzureADAuth(dsn) {
-		driverName = azuread.DriverName
-		dsn = normalizeAzureADDSN(dsn)
-	}
+	driverName := DriverNameForDSN(dsn)
+	dsn = NormalizeDSNForDriver(dsn)
 	return sql.Open(driverName, dsn)
 }
 
 func IsConfiguredDSN(dsn string) bool {
 	dsn = strings.TrimSpace(dsn)
 	return dsn != "" && !strings.EqualFold(dsn, "NOT SET")
+}
+
+func DriverNameForDSN(dsn string) string {
+	if usesAzureADAuth(dsn) {
+		return azuread.DriverName
+	}
+	return "sqlserver"
+}
+
+func NormalizeDSNForDriver(dsn string) string {
+	if usesAzureADAuth(dsn) {
+		return normalizeAzureADDSN(dsn)
+	}
+	return dsn
+}
+
+func AuthModeForDSN(dsn string) string {
+	if !IsConfiguredDSN(dsn) {
+		return "not-configured"
+	}
+
+	for _, part := range strings.Split(dsn, ";") {
+		key, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+
+		key = strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), " ", ""))
+		value = strings.TrimSpace(value)
+		switch key {
+		case "fedauth":
+			return "fedauth:" + value
+		case "authentication":
+			return "authentication:" + value
+		case "integratedsecurity", "trusted_connection":
+			return "integrated-security:" + value
+		}
+	}
+
+	return "sql-auth-or-default"
 }
 
 func usesAzureADAuth(dsn string) bool {

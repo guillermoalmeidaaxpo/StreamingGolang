@@ -33,6 +33,7 @@ func main() {
 		logger.Error("configuration failed", slog.Any("error", err))
 		os.Exit(1)
 	}
+	logStartupConfiguration(logger, cfg)
 
 	authenticator, err := auth.New(context.Background(), cfg.Auth)
 	if err != nil {
@@ -154,4 +155,32 @@ func main() {
 	}
 
 	logger.Info("outbound api stopped")
+}
+
+func logStartupConfiguration(logger *slog.Logger, cfg config.Config) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		workingDir = "unknown: " + err.Error()
+	}
+
+	logger.Info("configuration loaded",
+		slog.String("working_directory", workingDir),
+		slog.String("stage", cfg.Build.Stage),
+		slog.String("outbound_env", os.Getenv("OUTBOUND_ENV")),
+		slog.String("outbound_config_dir", os.Getenv("OUTBOUND_CONFIG_DIR")),
+	)
+
+	logSQLDatastore(logger, "cmdp_sql", cfg.ConnectionStrings.CmdpSQLDatabase)
+	logSQLDatastore(logger, "mapping_sql", cfg.ConnectionStrings.CmdpMappingDatabase)
+	logSQLDatastore(logger, "mds_sql", cfg.ConnectionStrings.MdsDatabase)
+	logSQLDatastore(logger, "mesap_mapping_sql", cfg.ConnectionStrings.MesapMappingDatabase)
+}
+
+func logSQLDatastore(logger *slog.Logger, name, dsn string) {
+	logger.Info("sql datastore configured",
+		slog.String("datastore", name),
+		slog.Bool("configured", mssql.IsConfiguredDSN(dsn)),
+		slog.String("driver", mssql.DriverNameForDSN(dsn)),
+		slog.String("auth_mode", mssql.AuthModeForDSN(dsn)),
+	)
 }

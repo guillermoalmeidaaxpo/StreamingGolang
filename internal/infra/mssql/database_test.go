@@ -49,3 +49,21 @@ func TestNormalizeAzureADDSNKeepsExistingFedAuth(t *testing.T) {
 		t.Fatalf("normalized dsn = %q, want %q", got, want)
 	}
 }
+
+func TestDriverNameForDSN(t *testing.T) {
+	if got := DriverNameForDSN("Server=s.database.windows.net;fedauth=ActiveDirectoryDefault;Database=db;"); got != "azuresql" {
+		t.Fatalf("driver = %q, want azuresql", got)
+	}
+	if got := DriverNameForDSN("Server=cmdp_db_uat;Database=CMDP;Integrated Security=SSPI;"); got != "sqlserver" {
+		t.Fatalf("driver = %q, want sqlserver", got)
+	}
+}
+
+func TestAuthModeForDSN(t *testing.T) {
+	if got := AuthModeForDSN("Server=s.database.windows.net;Database=db;fedauth=ActiveDirectoryDefault;"); got != "fedauth:ActiveDirectoryDefault" {
+		t.Fatalf("auth mode = %q", got)
+	}
+	if got := AuthModeForDSN("Server=cmdp_db_uat;Database=CMDP;Integrated Security=SSPI;"); got != "integrated-security:SSPI" {
+		t.Fatalf("auth mode = %q", got)
+	}
+}
