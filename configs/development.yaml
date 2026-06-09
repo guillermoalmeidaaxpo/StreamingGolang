@@ -19,7 +19,7 @@ datastores:
   mesap_mapping_sql:
     dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;"
   redis:
-    address: axso-nonprod-appl-mds-dev-redis-cache.redis.cache.windows.net:6380
+    address: "NOT SET"
     tls: true
     ignore_allowed_users_check: true
     allowed_users:
