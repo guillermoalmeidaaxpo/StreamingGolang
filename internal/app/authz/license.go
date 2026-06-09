@@ -42,6 +42,7 @@ type HttpLicenseValidator struct {
 func NewHttpLicenseValidator(baseURL, authorizePath, universePath string, timeout time.Duration) *HttpLicenseValidator {
 	// For dev environments pointing to internal Axpo servers, skip TLS verification if needed
 	tr := &http.Transport{
+		Proxy:           http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 	return &HttpLicenseValidator{
@@ -162,7 +163,7 @@ func (v *HttpLicenseValidator) postJSON(ctx context.Context, endpoint string, pa
 
 	resp, err := v.client.Do(httpReq)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.Unavailable, "call authorization service", err)
+		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("call authorization service %s", endpoint), err)
 	}
 	return resp, nil
 }
