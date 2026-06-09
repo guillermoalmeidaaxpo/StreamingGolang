@@ -93,6 +93,9 @@ func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req Licen
 	}
 	defer universeResp.Body.Close()
 
+	if universeResp.StatusCode == http.StatusNotFound {
+		return v.validateLegacyLicense(ctx, req, stageID)
+	}
 	if universeResp.StatusCode == http.StatusInternalServerError {
 		return apperr.New(apperr.Unavailable, "An error occurred while validating the data universe")
 	}
@@ -120,11 +123,24 @@ func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req Licen
 		InternalCorrelationID: req.InternalCorrelationID,
 	}
 
+	return v.postLicense(ctx, licenseReq, req.InternalCorrelationID)
+}
+
+func (v *HttpLicenseValidator) validateLegacyLicense(ctx context.Context, req LicenseRequest, stageID uint8) error {
+	licenseReq := timeSeriesRequest{
+		Identifiers:           req.Identifiers,
+		StageID:               stageID,
+		InternalCorrelationID: req.InternalCorrelationID,
+	}
+	return v.postLicense(ctx, licenseReq, req.InternalCorrelationID)
+}
+
+func (v *HttpLicenseValidator) postLicense(ctx context.Context, licenseReq timeSeriesRequest, correlationID string) error {
 	authorizeURL, err := joinURL(v.baseURL, v.authorizePath)
 	if err != nil {
 		return apperr.Wrap(apperr.Internal, "build license authorization URL", err)
 	}
-	licenseResp, err := v.postJSON(ctx, authorizeURL, licenseReq, req.InternalCorrelationID)
+	licenseResp, err := v.postJSON(ctx, authorizeURL, licenseReq, correlationID)
 	if err != nil {
 		return err
 	}

@@ -82,6 +82,35 @@ func TestHttpLicenseValidatorRejectsUniverseDenial(t *testing.T) {
 	}
 }
 
+func TestHttpLicenseValidatorFallsBackToLegacyLicenseWhenUniverseNotFound(t *testing.T) {
+	seen := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/DataUniverse/BulkAuthorize":
+			http.NotFound(w, r)
+		case "/api/v1/TimeSeries":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries", "api/v1/DataUniverse/BulkAuthorize", time.Second)
+
+	err := validator.ValidateReadAccess(contextWithRawToken("test-token"), LicenseRequest{
+		Identifiers: []int64{40},
+		Stage:       "productive",
+	})
+	if err != nil {
+		t.Fatalf("validate read access failed: %v", err)
+	}
+	if got := strings.Join(seen, ","); got != "/api/v1/DataUniverse/BulkAuthorize,/api/v1/TimeSeries" {
+		t.Fatalf("paths = %s", got)
+	}
+}
+
 func contextWithRawToken(token string) context.Context {
 	return context.WithValue(context.Background(), "raw_bearer_token", token)
 }
