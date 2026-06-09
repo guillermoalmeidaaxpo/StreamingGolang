@@ -1,0 +1,72 @@
+meta:
+  build_number: development
+  stage: development
+
+auth:
+  mode: disabled
+
+authorization_api:
+  base_url: https://authorization-hs.lab.mds.axpo.com
+  timeout: 5s
+
+datastores:
+  cmdp_sql:
+    dsn: "Server=cmdp_db_uat;Database=CMDP;Integrated Security=SSPI;TrustServerCertificate=True;Max Pool Size=20;"
+  mapping_sql:
+    dsn: "Server=axso-nonprod-appl-mds-dev-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-np-mds-dev-transactionaldataoutbound-sqldb;"
+  mds_sql:
+    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;"
+  mesap_mapping_sql:
+    dsn: "Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Authentication=Active Directory Interactive;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;"
+  redis:
+    address: axso-nonprod-appl-mds-dev-redis-cache.redis.cache.windows.net:6380
+    tls: true
+    ignore_allowed_users_check: true
+    allowed_users:
+      - 29c08a5a-c303-4051-9b22-893f11d7e5f6
+      - 261bab71-1a07-4b1b-9e55-3ceffcdd9c29
+      - 9368cca9-4f9d-43ac-8099-ad22af83b8d5
+      - d0170e6d-973a-4769-ac78-75fdb15cdfec
+      - 39633c8c-4bab-4e22-a2d9-6df9068e7e5b
+  cassandra:
+    data_centers:
+      lupfig:
+        - cmdp_cassandra1.prod.axponet.ch
+        - cmdp_cassandra2.prod.axponet.ch
+        - cmdp_cassandra3.prod.axponet.ch
+      glattbrugg:
+        - cmdp_cassandra4.prod.axponet.ch
+        - cmdp_cassandra5.prod.axponet.ch
+        - cmdp_cassandra6.prod.axponet.ch
+    keyspace: ts
+    primary_data_center: glattbrugg
+    local_connections: 4
+    local_max_connections: 10
+    remote_connections: 2
+    remote_max_connections: 4
+    port: 9042
+    max_parallel_queries: 10
+    connection_timeout: 10s
+    read_timeout: 12s
+    table_mappings:
+      power: hpfc
+      gas: gas_pfc
+      oil: oil_pfc
+      coal: coal_pfc
+
+database:
+  connect_retry:
+    timeout: 60s
+    count: 3
+    interval: 10s
+  command_retry:
+    command_timeout: 120s
+    count: 3
+    interval: 5s
+    max_interval: 120s
+
+logging:
+  default_level: debug
+  microsoft_level: info
+  system_level: info
+  application_insights_default_level: info
