@@ -77,6 +77,13 @@ func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req Licen
 	if req.InternalCorrelationID != "" {
 		httpReq.Header.Set("X-Correlation-ID", req.InternalCorrelationID)
 	}
+	
+	// Forward the Bearer token from the incoming request context to the Authorization API
+	if _, ok := auth.PrincipalFromContext(ctx); ok {
+		if rawToken, ok := ctx.Value("raw_bearer_token").(string); ok {
+			httpReq.Header.Set("Authorization", "Bearer "+rawToken)
+		}
+	}
 
 	resp, err := v.client.Do(httpReq)
 	if err != nil {

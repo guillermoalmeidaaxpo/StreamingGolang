@@ -108,6 +108,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			Claims:  claims.Raw,
 		}
 		ctx := context.WithValue(r.Context(), principalKey, principal)
+		ctx = context.WithValue(ctx, "raw_bearer_token", rawToken)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
