@@ -3,7 +3,7 @@ meta:
   stage: development
 
 auth:
-  mode: disabled
+  mode: jwt
 
 authorization_api:
   base_url: https://authorization-hs.lab.mds.axpo.com
