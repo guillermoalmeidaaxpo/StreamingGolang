@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,19 +36,24 @@ func (NoopLicenseValidator) ValidateReadAccess(context.Context, LicenseRequest) 
 
 type HttpLicenseValidator struct {
 	client        *http.Client
+	logger        *slog.Logger
 	baseURL       string
 	authorizePath string
 	universePath  string
 }
 
-func NewHttpLicenseValidator(baseURL, authorizePath, universePath string, timeout time.Duration) *HttpLicenseValidator {
+func NewHttpLicenseValidator(baseURL, authorizePath, universePath string, timeout time.Duration, logger *slog.Logger) *HttpLicenseValidator {
 	// For dev environments pointing to internal Axpo servers, skip TLS verification if needed
 	tr := &http.Transport{
 		Proxy:           http.ProxyFromEnvironment,
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &HttpLicenseValidator{
 		client:        &http.Client{Timeout: timeout, Transport: tr},
+		logger:        logger,
 		baseURL:       strings.TrimSpace(baseURL),
 		authorizePath: strings.TrimSpace(authorizePath),
 		universePath:  strings.TrimSpace(universePath),
@@ -68,6 +75,8 @@ type timeSeriesRequest struct {
 	InternalCorrelationID string  `json:"internalCorrelationId,omitempty"`
 }
 
+const authorizationResponsePreviewBytes = 4096
+
 func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req LicenseRequest) error {
 	if v.baseURL == "" || v.baseURL == "NOT SET" {
 		return nil
@@ -87,15 +96,20 @@ func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req Licen
 	if err != nil {
 		return apperr.Wrap(apperr.Internal, "build universe authorization URL", err)
 	}
-	universeResp, err := v.postJSON(ctx, universeURL, universeReq, req.InternalCorrelationID)
+	universeResp, err := v.postJSON(ctx, authorizationCall{
+		Kind:                  "data-universe",
+		Endpoint:              universeURL,
+		Payload:               universeReq,
+		Identifiers:           req.Identifiers,
+		Stage:                 req.Stage,
+		StageID:               stageID,
+		InternalCorrelationID: req.InternalCorrelationID,
+	})
 	if err != nil {
 		return err
 	}
 	defer universeResp.Body.Close()
 
-	if universeResp.StatusCode == http.StatusNotFound {
-		return v.validateLegacyLicense(ctx, req, stageID)
-	}
 	if universeResp.StatusCode == http.StatusInternalServerError {
 		return apperr.New(apperr.Unavailable, "An error occurred while validating the data universe")
 	}
@@ -126,21 +140,19 @@ func (v *HttpLicenseValidator) ValidateReadAccess(ctx context.Context, req Licen
 	return v.postLicense(ctx, licenseReq, req.InternalCorrelationID)
 }
 
-func (v *HttpLicenseValidator) validateLegacyLicense(ctx context.Context, req LicenseRequest, stageID uint8) error {
-	licenseReq := timeSeriesRequest{
-		Identifiers:           req.Identifiers,
-		StageID:               stageID,
-		InternalCorrelationID: req.InternalCorrelationID,
-	}
-	return v.postLicense(ctx, licenseReq, req.InternalCorrelationID)
-}
-
 func (v *HttpLicenseValidator) postLicense(ctx context.Context, licenseReq timeSeriesRequest, correlationID string) error {
 	authorizeURL, err := joinURL(v.baseURL, v.authorizePath)
 	if err != nil {
 		return apperr.Wrap(apperr.Internal, "build license authorization URL", err)
 	}
-	licenseResp, err := v.postJSON(ctx, authorizeURL, licenseReq, correlationID)
+	licenseResp, err := v.postJSON(ctx, authorizationCall{
+		Kind:                  "license",
+		Endpoint:              authorizeURL,
+		Payload:               licenseReq,
+		Identifiers:           licenseReq.Identifiers,
+		StageID:               licenseReq.StageID,
+		InternalCorrelationID: correlationID,
+	})
 	if err != nil {
 		return err
 	}
@@ -157,31 +169,110 @@ func (v *HttpLicenseValidator) postLicense(ctx context.Context, licenseReq timeS
 	return apperr.New(apperr.Unavailable, fmt.Sprintf("authorization license service returned status %d", licenseResp.StatusCode))
 }
 
-func (v *HttpLicenseValidator) postJSON(ctx context.Context, endpoint string, payload any, correlationID string) (*http.Response, error) {
-	jsonBody, err := json.Marshal(payload)
+type authorizationCall struct {
+	Kind                  string
+	Endpoint              string
+	Payload               any
+	Identifiers           []int64
+	Stage                 string
+	StageID               uint8
+	InternalCorrelationID string
+}
+
+func (v *HttpLicenseValidator) postJSON(ctx context.Context, call authorizationCall) (*http.Response, error) {
+	jsonBody, err := json.Marshal(call.Payload)
 	if err != nil {
 		return nil, apperr.Wrap(apperr.Internal, "marshal authorization request", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(jsonBody))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, call.Endpoint, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, apperr.Wrap(apperr.Internal, "create authorization request", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if correlationID != "" {
-		httpReq.Header.Set("X-Correlation-ID", correlationID)
+	if call.InternalCorrelationID != "" {
+		httpReq.Header.Set("X-Correlation-ID", call.InternalCorrelationID)
 	}
 
 	if rawToken, ok := ctx.Value("raw_bearer_token").(string); ok && strings.TrimSpace(rawToken) != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+rawToken)
 	}
 
+	start := time.Now()
+	v.logger.InfoContext(ctx, "calling authorization api",
+		slog.String("authorization_call", call.Kind),
+		slog.String("authorization_endpoint", call.Endpoint),
+		slog.Any("identifiers", call.Identifiers),
+		slog.String("stage", call.Stage),
+		slog.Int("stage_id", int(call.StageID)),
+		slog.String("correlation_id", call.InternalCorrelationID),
+		slog.Int("request_bytes", len(jsonBody)),
+		slog.String("request_body", string(jsonBody)),
+	)
+
 	resp, err := v.client.Do(httpReq)
+	duration := time.Since(start)
 	if err != nil {
-		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("call authorization service %s", endpoint), err)
+		v.logger.ErrorContext(ctx, "authorization api call failed",
+			slog.String("authorization_call", call.Kind),
+			slog.String("authorization_endpoint", call.Endpoint),
+			slog.Any("identifiers", call.Identifiers),
+			slog.String("stage", call.Stage),
+			slog.Int("stage_id", int(call.StageID)),
+			slog.String("correlation_id", call.InternalCorrelationID),
+			slog.Duration("duration", duration),
+			slog.Any("error", err),
+		)
+		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("call authorization service %s", call.Endpoint), err)
 	}
+
+	responseBody, responsePreview, err := readAndRestoreBody(resp)
+	if err != nil {
+		v.logger.WarnContext(ctx, "authorization api response body could not be read for logging",
+			slog.String("authorization_call", call.Kind),
+			slog.String("authorization_endpoint", call.Endpoint),
+			slog.Any("identifiers", call.Identifiers),
+			slog.String("stage", call.Stage),
+			slog.Int("stage_id", int(call.StageID)),
+			slog.String("correlation_id", call.InternalCorrelationID),
+			slog.Int("status", resp.StatusCode),
+			slog.Duration("duration", duration),
+			slog.Any("error", err),
+		)
+	}
+
+	v.logger.InfoContext(ctx, "authorization api call completed",
+		slog.String("authorization_call", call.Kind),
+		slog.String("authorization_endpoint", call.Endpoint),
+		slog.Any("identifiers", call.Identifiers),
+		slog.String("stage", call.Stage),
+		slog.Int("stage_id", int(call.StageID)),
+		slog.String("correlation_id", call.InternalCorrelationID),
+		slog.Int("status", resp.StatusCode),
+		slog.Duration("duration", duration),
+		slog.Int("response_bytes", len(responseBody)),
+		slog.String("response_preview", responsePreview),
+	)
 	return resp, nil
+}
+
+func readAndRestoreBody(resp *http.Response) ([]byte, string, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, "", nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+
+	preview := body
+	if len(preview) > authorizationResponsePreviewBytes {
+		preview = preview[:authorizationResponsePreviewBytes]
+	}
+	return body, string(preview), nil
 }
 
 func joinURL(baseURL, path string) (string, error) {

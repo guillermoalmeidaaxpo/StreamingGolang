@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,7 +32,7 @@ func TestHttpLicenseValidatorMatchesCSharpAuthorizationFlow(t *testing.T) {
 				t.Fatalf("universe mdoIds = %#v, want [40]", body.MDOIDs)
 			}
 			_, _ = w.Write([]byte(`{"40":true}`))
-		case "/api/v1/TimeSeries":
+		case "/api/v1/TimeSeries/Authorize":
 			var body timeSeriesRequest
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatalf("decode license request: %v", err)
@@ -46,7 +47,7 @@ func TestHttpLicenseValidatorMatchesCSharpAuthorizationFlow(t *testing.T) {
 	}))
 	defer server.Close()
 
-	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries/", "api/v1/DataUniverse/BulkAuthorize", time.Second)
+	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries/Authorize", "api/v1/DataUniverse/BulkAuthorize", time.Second, slog.Default())
 	ctx := contextWithRawToken("test-token")
 
 	err := validator.ValidateReadAccess(ctx, LicenseRequest{
@@ -57,7 +58,7 @@ func TestHttpLicenseValidatorMatchesCSharpAuthorizationFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validate read access failed: %v", err)
 	}
-	if got := strings.Join(seen, ","); got != "/api/v1/DataUniverse/BulkAuthorize,/api/v1/TimeSeries" {
+	if got := strings.Join(seen, ","); got != "/api/v1/DataUniverse/BulkAuthorize,/api/v1/TimeSeries/Authorize" {
 		t.Fatalf("paths = %s", got)
 	}
 }
@@ -71,7 +72,7 @@ func TestHttpLicenseValidatorRejectsUniverseDenial(t *testing.T) {
 	}))
 	defer server.Close()
 
-	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries", "api/v1/DataUniverse/BulkAuthorize", time.Second)
+	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries/Authorize", "api/v1/DataUniverse/BulkAuthorize", time.Second, slog.Default())
 
 	err := validator.ValidateReadAccess(contextWithRawToken("test-token"), LicenseRequest{
 		Identifiers: []int64{40},
@@ -82,31 +83,29 @@ func TestHttpLicenseValidatorRejectsUniverseDenial(t *testing.T) {
 	}
 }
 
-func TestHttpLicenseValidatorFallsBackToLegacyLicenseWhenUniverseNotFound(t *testing.T) {
-	seen := make([]string, 0, 2)
+func TestHttpLicenseValidatorStopsWhenUniverseNotFound(t *testing.T) {
+	seen := make([]string, 0, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.URL.Path)
 		switch r.URL.Path {
 		case "/api/v1/DataUniverse/BulkAuthorize":
 			http.NotFound(w, r)
-		case "/api/v1/TimeSeries":
-			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}
 	}))
 	defer server.Close()
 
-	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries", "api/v1/DataUniverse/BulkAuthorize", time.Second)
+	validator := NewHttpLicenseValidator(server.URL, "api/v1/TimeSeries/Authorize", "api/v1/DataUniverse/BulkAuthorize", time.Second, slog.Default())
 
 	err := validator.ValidateReadAccess(contextWithRawToken("test-token"), LicenseRequest{
 		Identifiers: []int64{40},
 		Stage:       "productive",
 	})
-	if err != nil {
-		t.Fatalf("validate read access failed: %v", err)
+	if err == nil {
+		t.Fatal("expected universe authorization error")
 	}
-	if got := strings.Join(seen, ","); got != "/api/v1/DataUniverse/BulkAuthorize,/api/v1/TimeSeries" {
+	if got := strings.Join(seen, ","); got != "/api/v1/DataUniverse/BulkAuthorize" {
 		t.Fatalf("paths = %s", got)
 	}
 }

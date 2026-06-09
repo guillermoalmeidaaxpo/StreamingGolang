@@ -20,7 +20,7 @@ auth:
 
 authorization_api:
   base_url: NOT SET
-  authorize_path: /api/v1/TimeSeries/
+  authorize_path: /api/v1/TimeSeries/Authorize
   universe_authorize_path: /api/v1/DataUniverse/BulkAuthorize
   timeout: 30s
 

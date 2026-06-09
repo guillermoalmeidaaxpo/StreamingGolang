@@ -113,6 +113,7 @@ func main() {
 		cfg.AuthorizationAPI.Endpoint,
 		cfg.AuthorizationAPI.UniverseEndpoint,
 		cfg.AuthorizationAPI.Timeout,
+		logger,
 	)
 
 	licenseValidator := authz.NewAllowedUserLicenseValidator(
