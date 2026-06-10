@@ -2,6 +2,7 @@ package transactional
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type requestPlanner struct {
 	quoteIndices QuoteIndexPlanner
 	strategy     QueryStrategy
 	queryBuilder QueryBuilder
+	logger       *slog.Logger
 }
 
 type ExecutableQuery = domain.ExecutableQuery
@@ -36,6 +38,7 @@ func NewPlanner(options ...PlannerOption) Planner {
 		quoteIndices: FilterQuoteIndexPlanner{},
 		strategy:     SingleQueryStrategy{},
 		queryBuilder: PlaceholderQueryBuilder{},
+		logger:       slog.Default(),
 	}
 	for _, option := range options {
 		option(&planner)
@@ -77,6 +80,14 @@ func WithQueryBuilder(builder QueryBuilder) PlannerOption {
 	}
 }
 
+func WithLogger(logger *slog.Logger) PlannerOption {
+	return func(p *requestPlanner) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
+}
+
 func NewPlannerWithStrategy(strategies ...QueryStrategy) Planner {
 	strategy := QueryStrategy(SingleQueryStrategy{})
 	if len(strategies) > 0 && strategies[0] != nil {
@@ -96,10 +107,10 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 
 		commands := commandsForRequest(requestContext, request, mappings)
 		for _, command := range commands {
+			command = selectFetchingStrategy(command)
 			if err := validateAgainstMappings(requestContext, request, command, command.Mappings); err != nil {
 				return Plan{}, err
 			}
-			command.Source = sourceFromMappings(command.Mappings)
 
 			hybridCommands, err := p.splitHybridCommand(ctx, command)
 			if err != nil {
@@ -112,7 +123,13 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 					if err != nil {
 						return Plan{}, err
 					}
+					p.logQuoteIndices(ctx, "cassandra quote indices generated", hCommand)
 					if len(hCommand.QuoteIndices) == 0 && hasReferenceTimeFilter(hCommand.Filters.Nodes) {
+						p.logger.WarnContext(ctx, "skipping Cassandra command because quote indices are empty",
+							slog.Any("identifiers", hCommand.IDs),
+							slog.String("data_category", string(hCommand.DataCategory)),
+							slog.String("filter_time_zone", hCommand.FilterTimeZone),
+						)
 						continue
 					}
 				} else {
@@ -121,6 +138,7 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 						return Plan{}, err
 					}
 					hCommand.QuoteIndices = commandQuoteIndices
+					p.logQuoteIndices(ctx, "CMDP quote indices generated", hCommand)
 				}
 
 				splitCommands := p.strategy.Plan(hCommand)
@@ -130,6 +148,13 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 						return Plan{}, err
 					}
 					if len(built) == 0 {
+						p.logger.WarnContext(ctx, "query builder produced no queries",
+							slog.Any("identifiers", splitCommand.IDs),
+							slog.String("source", string(splitCommand.Source)),
+							slog.String("data_category", string(splitCommand.DataCategory)),
+							slog.Int("mapping_count", len(splitCommand.Mappings)),
+							slog.Int("quote_index_count", len(splitCommand.QuoteIndices)),
+						)
 						continue
 					}
 					steps = append(steps, PlanStep{
@@ -146,7 +171,7 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 
 func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command) ([]Command, error) {
 	// Only split if the command is eligible
-	if command.HasAggregations || !isEligibleForHybridSplit(command.Mappings) || !hasReferenceTimeFilter(command.Filters.Nodes) {
+	if command.Source != domain.SourceCassandra || command.HasAggregations || command.HasShape || !isEligibleForHybridSplit(command.Mappings) || !hasReferenceTimeFilter(command.Filters.Nodes) {
 		return []Command{command}, nil
 	}
 
@@ -159,12 +184,18 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 	if point, ok, err := referenceTimeEqualityPoint(command.Filters.Nodes, filterLocation); err != nil {
 		return nil, err
 	} else if ok {
+		selectedSource := domain.SourceCMDP
 		if point.Before(watermark) {
-			command.Source = domain.SourceCassandra
-		} else {
-			command.Source = domain.SourceCMDP
+			selectedSource = domain.SourceCassandra
 		}
-		return []Command{command}, nil
+		p.logger.InfoContext(ctx, "hybrid equality route selected",
+			slog.Any("identifiers", command.IDs),
+			slog.Time("reference_time", point),
+			slog.Time("watermark", watermark),
+			slog.String("source", string(selectedSource)),
+			slog.String("filter_time_zone", command.FilterTimeZone),
+		)
+		return []Command{withCommandSource(command, selectedSource)}, nil
 	}
 
 	// Analyze ReferenceTime filters to decide how to split
@@ -176,20 +207,29 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 
 	// 1. Entirely Cassandra: UpperLimit < watermark
 	if limits.end != nil && limits.end.Before(watermark) {
-		command.Source = domain.SourceCassandra
-		return []Command{command}, nil
+		p.logger.InfoContext(ctx, "hybrid range route selected",
+			slog.Any("identifiers", command.IDs),
+			slog.Time("range_end", *limits.end),
+			slog.Time("watermark", watermark),
+			slog.String("source", string(domain.SourceCassandra)),
+		)
+		return []Command{withCommandSource(command, domain.SourceCassandra)}, nil
 	}
 
 	// 2. Entirely CMDP: LowerLimit >= watermark
 	if limits.start != nil && (limits.start.After(watermark) || limits.start.Equal(watermark)) {
-		command.Source = domain.SourceCMDP
-		return []Command{command}, nil
+		p.logger.InfoContext(ctx, "hybrid range route selected",
+			slog.Any("identifiers", command.IDs),
+			slog.Time("range_start", *limits.start),
+			slog.Time("watermark", watermark),
+			slog.String("source", string(domain.SourceCMDP)),
+		)
+		return []Command{withCommandSource(command, domain.SourceCMDP)}, nil
 	}
 
 	// 3. Hybrid: Crossing the watermark
 	// Create a Cassandra command for [min, watermark)
-	cassandraCmd := command
-	cassandraCmd.Source = domain.SourceCassandra
+	cassandraCmd := withCommandSource(command, domain.SourceCassandra)
 	cassandraCmd.Filters = command.Filters.Clone()
 	cassandraCmd.Filters.Nodes = append(cassandraCmd.Filters.Nodes, domain.ComparisonFilter{
 		Field:    referenceTimeField,
@@ -198,8 +238,7 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 	})
 
 	// Create a CMDP command for [watermark, max]
-	cmdpCmd := command
-	cmdpCmd.Source = domain.SourceCMDP
+	cmdpCmd := withCommandSource(command, domain.SourceCMDP)
 	cmdpCmd.Filters = command.Filters.Clone()
 	cmdpCmd.Filters.Nodes = append(cmdpCmd.Filters.Nodes, domain.ComparisonFilter{
 		Field:    referenceTimeField,
@@ -207,7 +246,40 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 		Value:    domain.FilterValue{Kind: domain.FilterValuePointInTime, Raw: watermark.Format(time.RFC3339Nano)},
 	})
 
+	p.logger.InfoContext(ctx, "hybrid range split selected",
+		slog.Any("identifiers", command.IDs),
+		slog.Time("watermark", watermark),
+	)
 	return []Command{cassandraCmd, cmdpCmd}, nil
+}
+
+func withCommandSource(command Command, source domain.SourceKind) Command {
+	command.Source = source
+	command.Mappings = append([]domain.Mapping(nil), command.Mappings...)
+	for i := range command.Mappings {
+		command.Mappings[i].Source = source
+	}
+	return command
+}
+
+func (p requestPlanner) logQuoteIndices(ctx context.Context, message string, command Command) {
+	count := len(command.QuoteIndices)
+	attrs := []any{
+		slog.Any("identifiers", command.IDs),
+		slog.String("source", string(command.Source)),
+		slog.String("data_category", string(command.DataCategory)),
+		slog.Int("quote_index_count", count),
+	}
+	if count > 0 {
+		attrs = append(attrs,
+			slog.Int("first_quote_index", command.QuoteIndices[0]),
+			slog.Int("last_quote_index", command.QuoteIndices[count-1]),
+		)
+		if count <= 10 {
+			attrs = append(attrs, slog.Any("quote_indices", command.QuoteIndices))
+		}
+	}
+	p.logger.InfoContext(ctx, message, attrs...)
 }
 
 func isEligibleForHybridSplit(mappings []Mapping) bool {
@@ -332,9 +404,60 @@ func hasAggregations(request Request) bool {
 	return request.Transformations != nil && (len(request.Transformations.Keys) > 0 || len(request.Transformations.Values) > 0)
 }
 
-func sourceFromMappings(mappings []Mapping) SourceKind {
-	if len(mappings) == 0 {
+func selectFetchingStrategy(command Command) Command {
+	return withCommandSource(command, fetchingSource(command))
+}
+
+func fetchingSource(command Command) SourceKind {
+	if len(command.Mappings) == 0 {
 		return domain.SourceCMDP
 	}
-	return mappings[0].Source
+
+	mapping := command.Mappings[0]
+	if mapping.Source == domain.SourceMesap {
+		return domain.SourceMesap
+	}
+	if mapping.HyperscaleID != nil || mapping.Source == domain.SourceHyperscale {
+		return domain.SourceHyperscale
+	}
+	if shouldUseCMDPStrategy(command) {
+		return domain.SourceCMDP
+	}
+	return domain.SourceCassandra
+}
+
+func shouldUseCMDPStrategy(command Command) bool {
+	if command.HasShape || command.HasAggregations {
+		return true
+	}
+	if len(command.Mappings) == 0 {
+		return true
+	}
+
+	mapping := command.Mappings[0]
+	if mapping.Source == domain.SourceCMDP {
+		return true
+	}
+	if _, ok := hpfcIDsForcedToCMDP[mapping.ID]; ok {
+		return true
+	}
+	if strings.TrimSpace(mapping.CassandraID) == "" {
+		return true
+	}
+	return !isEuropeZurichCassandraTimezone(cassandraTimeZone(command.Mappings))
+}
+
+func isEuropeZurichCassandraTimezone(timezone string) bool {
+	switch strings.ToLower(strings.TrimSpace(timezone)) {
+	case "", "cet", "europe/zurich":
+		return true
+	default:
+		return false
+	}
+}
+
+var hpfcIDsForcedToCMDP = map[domain.Identifier]struct{}{
+	536000751: {},
+	536214287: {},
+	536346251: {},
 }

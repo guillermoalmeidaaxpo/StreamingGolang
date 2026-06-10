@@ -481,14 +481,14 @@ func parseDataCategory(value string, fallback domain.DataCategory) domain.DataCa
 }
 
 func sourceKind(row mappingRow) domain.SourceKind {
-	if row.CassandraID.Valid && row.CassandraID.String != "" {
-		return domain.SourceCassandra
-	}
 	if row.HyperscaleID.Valid {
 		return domain.SourceHyperscale
 	}
 	if strings.HasPrefix(strings.ToLower(row.SwitchOver.String), "mds") {
 		return domain.SourceHyperscale
+	}
+	if row.CassandraID.Valid && row.CassandraID.String != "" {
+		return domain.SourceCassandra
 	}
 	return domain.SourceCMDP
 }

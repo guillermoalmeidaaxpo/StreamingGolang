@@ -156,6 +156,9 @@ func TestPlannerRoutesMidnightEqualityToCassandraQuoteIndex(t *testing.T) {
 	if plan.Steps[0].Command.Source != domain.SourceCassandra {
 		t.Fatalf("expected source Cassandra, got %q", plan.Steps[0].Command.Source)
 	}
+	if plan.Steps[0].Command.Mappings[0].Source != domain.SourceCassandra {
+		t.Fatalf("expected mapping source Cassandra, got %q", plan.Steps[0].Command.Mappings[0].Source)
+	}
 	want := []int{20240426}
 	if !reflect.DeepEqual(plan.Steps[0].Command.QuoteIndices, want) {
 		t.Fatalf("quote indices = %#v, want %#v", plan.Steps[0].Command.QuoteIndices, want)
@@ -252,6 +255,9 @@ func TestPlannerRoutesEqualityAtWatermarkToCMDP(t *testing.T) {
 	}
 	if plan.Steps[0].Command.Source != domain.SourceCMDP {
 		t.Fatalf("expected source CMDP, got %q", plan.Steps[0].Command.Source)
+	}
+	if plan.Steps[0].Command.Mappings[0].Source != domain.SourceCMDP {
+		t.Fatalf("expected mapping source CMDP, got %q", plan.Steps[0].Command.Mappings[0].Source)
 	}
 	if !resolver.watermarkCalled {
 		t.Fatal("watermark was not called for equality filter")

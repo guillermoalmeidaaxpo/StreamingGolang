@@ -113,7 +113,7 @@ func main() {
 		transactional.NewPlanner(transactional.WithQueryStrategy(transactional.SplitQueryStrategy{
 			QueriesCount:           cfg.Stream.MaxQueriesInParallel,
 			ReferenceTimeSplitDays: cfg.Stream.ReferenceTimeSplitDays,
-		}), transactional.WithMappingResolver(mappingResolver), transactional.WithQueryBuilder(queryBuilder)),
+		}), transactional.WithMappingResolver(mappingResolver), transactional.WithQueryBuilder(queryBuilder), transactional.WithLogger(logger)),
 		transactional.NewExecutor(repositories, cfg.Stream.MaxQueriesInParallel),
 	)
 
