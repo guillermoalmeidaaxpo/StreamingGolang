@@ -34,7 +34,7 @@ func (b *CassandraQueryBuilder) BuildQueries(_ context.Context, command domain.C
 
 	queries := make([]domain.ExecutableQuery, 0)
 	for _, mapping := range command.Mappings {
-		if mapping.Source != domain.SourceCassandra && mapping.CassandraID == "" {
+		if mapping.Source != domain.SourceCassandra {
 			continue
 		}
 
