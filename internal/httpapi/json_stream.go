@@ -16,6 +16,11 @@ func acceptsNDJSON(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), ndjsonContentType)
 }
 
+func acceptsJSON(r *http.Request) bool {
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(accept, "application/json")
+}
+
 func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 

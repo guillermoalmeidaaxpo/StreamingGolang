@@ -74,16 +74,25 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h handlers) genericCSV(w http.ResponseWriter, r *http.Request) {
+func (h handlers) generic(w http.ResponseWriter, r *http.Request) {
 	request, ok := decodeGenericRequest(w, r, "Invalid or empty generic body.")
 	if !ok {
 		return
 	}
 
-	requestContext := genericRequestContext(r.URL.Path, transactional.ModeCSV, h.config.Build.Stage)
+	mode := transactional.ModeCSV
+	if acceptsJSON(r) {
+		mode = transactional.ModeJSON
+	}
+	requestContext := genericRequestContext(r.URL.Path, mode, h.config.Build.Stage)
 	plan, result, err := h.transactionalPipeline.ExecuteWithPlan(r.Context(), requestContext, []transactional.Request{request})
 	if err != nil {
 		writeAppError(w, r, err)
+		return
+	}
+
+	if acceptsJSON(r) {
+		writeJSON(w, http.StatusOK, result)
 		return
 	}
 
@@ -92,19 +101,38 @@ func (h handlers) genericCSV(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h handlers) genericCSVStream(w http.ResponseWriter, r *http.Request) {
+func (h handlers) genericStream(w http.ResponseWriter, r *http.Request) {
 	request, ok := decodeGenericRequest(w, r, "Invalid or empty generic stream body.")
 	if !ok {
 		return
 	}
 
-	requestContext := genericRequestContext(r.URL.Path, transactional.ModeCSVStream, h.config.Build.Stage)
+	mode := transactional.ModeCSVStream
+	if acceptsNDJSON(r) {
+		mode = transactional.ModeNDJSONStream
+	} else if acceptsJSON(r) {
+		mode = transactional.ModeJSONStream
+	}
+	requestContext := genericRequestContext(r.URL.Path, mode, h.config.Build.Stage)
 	plan, stream, err := h.transactionalPipeline.StreamWithPlan(r.Context(), requestContext, []transactional.Request{request})
 	if err != nil {
 		writeAppError(w, r, err)
 		return
 	}
 	defer stream.Close()
+
+	if acceptsNDJSON(r) {
+		if err := writeTransactionalNDJSONStream(r.Context(), w, r, stream); err != nil && !errors.Is(err, r.Context().Err()) {
+			return
+		}
+		return
+	}
+	if acceptsJSON(r) {
+		if err := writeTransactionalJSONStream(r.Context(), w, r, stream); err != nil && !errors.Is(err, r.Context().Err()) {
+			return
+		}
+		return
+	}
 
 	if err := writeTransactionalCSVStream(r.Context(), w, stream, csvColumnsFromPlan(plan), csvIncludeOffset(plan), false); err != nil && !errors.Is(err, r.Context().Err()) {
 		return
