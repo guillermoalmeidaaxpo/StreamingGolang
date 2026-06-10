@@ -14,7 +14,7 @@ func TestParserAcceptsCurrentFilterSyntax(t *testing.T) {
 		"ReferenceTime in ti(2023-05-21T00:00:00,2023-05-21T23:59:59)",
 		"ReferenceTime = latest(DeliveryStart > 2023-01-01T00:00:00)",
 		"rankover([DeliveryStart],[ReferenceTime desc],[1,last])",
-	})
+	}, "Europe/Zurich")
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestParserBuildsComparisonAST(t *testing.T) {
 	filters, err := parser.Parse(context.Background(), []string{
 		"ReferenceTime in ti(2023-05-21T00:00:00,2023-05-21T23:59:59)",
 		"ReferenceTime = latest(DeliveryStart > 2023-01-01T00:00:00, QuoteIndex >= 1)",
-	})
+	}, "Europe/Zurich")
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestParserBuildsComparisonAST(t *testing.T) {
 	if interval.Value.Kind != domain.FilterValueTimeInterval {
 		t.Fatalf("interval kind = %q, want %q", interval.Value.Kind, domain.FilterValueTimeInterval)
 	}
-	if interval.Value.Start != "2023-05-21T00:00:00" || interval.Value.End != "2023-05-21T23:59:59" {
+	if interval.Value.Start != "2023-05-20T22:00:00Z" || interval.Value.End != "2023-05-21T21:59:59Z" {
 		t.Fatalf("interval bounds = %q/%q", interval.Value.Start, interval.Value.End)
 	}
 
@@ -61,6 +61,9 @@ func TestParserBuildsComparisonAST(t *testing.T) {
 	if latest.Value.Arguments[0].Field != "DeliveryStart" {
 		t.Fatalf("latest argument 0 = %#v", latest.Value.Arguments[0])
 	}
+	if latest.Value.Arguments[0].Value.Raw != "2022-12-31T23:00:00Z" {
+		t.Fatalf("latest argument 0 raw = %q", latest.Value.Arguments[0].Value.Raw)
+	}
 	if latest.Value.Arguments[1].Value.Kind != domain.FilterValueNumber {
 		t.Fatalf("latest argument 1 kind = %q, want %q", latest.Value.Arguments[1].Value.Kind, domain.FilterValueNumber)
 	}
@@ -71,7 +74,7 @@ func TestParserBuildsRankOverAST(t *testing.T) {
 
 	filters, err := parser.Parse(context.Background(), []string{
 		"rankover([DeliveryStart,QuoteIndex],[ReferenceTime desc,DeliveryStart asc],[1,last])",
-	})
+	}, "")
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
@@ -100,8 +103,27 @@ func TestParserBuildsRankOverAST(t *testing.T) {
 func TestParserRejectsInvalidFilterSyntax(t *testing.T) {
 	parser := New()
 
-	_, err := parser.Parse(context.Background(), []string{"ReferenceTime between 2023-01-01T00:00:00"})
+	_, err := parser.Parse(context.Background(), []string{"ReferenceTime between 2023-01-01T00:00:00"}, "")
 	if err == nil {
 		t.Fatal("expected parse error")
+	}
+}
+
+func TestParserNormalizesPointInTimeInFilterTimeZone(t *testing.T) {
+	parser := New()
+
+	filters, err := parser.Parse(context.Background(), []string{
+		"ReferenceTime = 2024-04-26T00:00:00",
+	}, "Europe/Zurich")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	comparison, ok := filters.Nodes[0].(domain.ComparisonFilter)
+	if !ok {
+		t.Fatalf("node 0 type = %T, want domain.ComparisonFilter", filters.Nodes[0])
+	}
+	if comparison.Value.Raw != "2024-04-25T22:00:00Z" {
+		t.Fatalf("raw point-in-time = %q", comparison.Value.Raw)
 	}
 }

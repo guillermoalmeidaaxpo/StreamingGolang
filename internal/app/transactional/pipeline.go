@@ -7,7 +7,7 @@ type Validator interface {
 }
 
 type FilterParser interface {
-	Parse(context.Context, []string) (FilterSet, error)
+	Parse(context.Context, []string, string) (FilterSet, error)
 }
 
 type Planner interface {
@@ -94,7 +94,7 @@ func (p *Pipeline) prepare(ctx context.Context, requests []Request) error {
 		if request.Filters == nil {
 			continue
 		}
-		parsed, err := p.parser.Parse(ctx, request.Filters.Expressions)
+		parsed, err := p.parser.Parse(ctx, request.Filters.Expressions, request.Filters.FilterTimeZone)
 		if err != nil {
 			return err
 		}

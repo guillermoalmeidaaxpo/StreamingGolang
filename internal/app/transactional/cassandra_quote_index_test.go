@@ -59,6 +59,23 @@ func TestCassandraQuoteIndexPlannerGeneratesIndexForMidnightEquality(t *testing.
 	}
 }
 
+func TestParsePointTimeUsesFilterTimeZoneForLocalTimestamp(t *testing.T) {
+	loc, err := time.LoadLocation("Europe/Zurich")
+	if err != nil {
+		t.Fatalf("load location failed: %v", err)
+	}
+
+	point, err := ParsePointTime("2024-04-26T00:00:00", loc)
+	if err != nil {
+		t.Fatalf("ParsePointTime returned error: %v", err)
+	}
+
+	want := time.Date(2024, 4, 25, 22, 0, 0, 0, time.UTC)
+	if !point.Equal(want) {
+		t.Fatalf("point = %s, want %s", point.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+}
+
 func TestCassandraQuoteIndexPlannerDoesNotGenerateIndexForNonMidnightEquality(t *testing.T) {
 	indices, err := CassandraQuoteIndexPlanner{}.PlanQuoteIndices(context.Background(), Command{
 		FilterTimeZone: "Europe/Zurich",

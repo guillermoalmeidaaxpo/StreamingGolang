@@ -32,7 +32,7 @@ func TestPipelineExecutePlansRequestedIDs(t *testing.T) {
 
 type testFilterParser struct{}
 
-func (testFilterParser) Parse(_ context.Context, expressions []string) (FilterSet, error) {
+func (testFilterParser) Parse(_ context.Context, expressions []string, _ string) (FilterSet, error) {
 	return FilterSet{Expressions: expressions}, nil
 }
 

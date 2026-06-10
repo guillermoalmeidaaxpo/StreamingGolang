@@ -1,23 +1,29 @@
 package antlrparser
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/antlr4-go/antlr/v4"
 
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 	"streaming-golang/internal/query/parser/antlr/generated"
 )
 
 type astVisitor struct {
 	*generated.BaseOutboundAPIParserVisitor
+	timeZone string
+	errors   []string
 }
 
-func newASTVisitor() *astVisitor {
+func newASTVisitor(timeZone string) *astVisitor {
 	return &astVisitor{
 		BaseOutboundAPIParserVisitor: &generated.BaseOutboundAPIParserVisitor{
 			BaseParseTreeVisitor: &antlr.BaseParseTreeVisitor{},
 		},
+		timeZone: timeZone,
 	}
 }
 
@@ -42,7 +48,7 @@ func (v *astVisitor) VisitIdPointInTimeArithmeticComparison(ctx *generated.IdPoi
 		Raw:      ctx.GetText(),
 		Field:    fieldName(ctx.ID(), ctx.KeySurfaceColumn()),
 		Operator: terminalText(ctx.COMPARISON_OPERATOR()),
-		Value:    pointInTimeValue(ctx.PointInTimeArithmetic()),
+		Value:    v.pointInTimeValue(ctx.PointInTimeArithmetic()),
 	}
 }
 
@@ -51,7 +57,7 @@ func (v *astVisitor) VisitIdTimeIntervalIn(ctx *generated.IdTimeIntervalInContex
 		Raw:      ctx.GetText(),
 		Field:    fieldName(ctx.ID(), ctx.KeySurfaceColumn()),
 		Operator: terminalText(ctx.IN()),
-		Value:    timeIntervalValue(ctx.TimeIntervalArithmetic()),
+		Value:    v.timeIntervalValue(ctx.TimeIntervalArithmetic()),
 	}
 }
 
@@ -86,7 +92,7 @@ func (v *astVisitor) VisitIdTimeIntervalToPointInTimeComparison(ctx *generated.I
 		Raw:      ctx.GetText(),
 		Field:    fieldName(ctx.ID(), ctx.KeySurfaceColumn()),
 		Operator: terminalText(ctx.COMPARISON_OPERATOR()),
-		Value:    intervalToPointInTimeValue(ctx.TimeIntervalToPointInTime()),
+		Value:    v.intervalToPointInTimeValue(ctx.TimeIntervalToPointInTime()),
 	}
 }
 
@@ -95,7 +101,7 @@ func (v *astVisitor) VisitIdLatestComparison(ctx *generated.IdLatestComparisonCo
 		Raw:      ctx.GetText(),
 		Field:    terminalText(ctx.ID()),
 		Operator: terminalText(ctx.COMPARISON_OPERATOR()),
-		Value:    latestValue(ctx.LatestFunction()),
+		Value:    v.latestValue(ctx.LatestFunction()),
 	}
 }
 
@@ -141,7 +147,7 @@ func (v *astVisitor) VisitRankOver(ctx *generated.RankOverContext) interface{} {
 	return filter
 }
 
-func latestValue(ctx generated.ILatestFunctionContext) domain.FilterValue {
+func (v *astVisitor) latestValue(ctx generated.ILatestFunctionContext) domain.FilterValue {
 	raw := nodeText(ctx)
 	value := domain.FilterValue{
 		Kind:     domain.FilterValueLatest,
@@ -152,12 +158,12 @@ func latestValue(ctx generated.ILatestFunctionContext) domain.FilterValue {
 		return value
 	}
 	for _, expression := range ctx.AllLatestExpression() {
-		value.Arguments = append(value.Arguments, latestExpression(expression))
+		value.Arguments = append(value.Arguments, v.latestExpression(expression))
 	}
 	return value
 }
 
-func latestExpression(ctx generated.ILatestExpressionContext) domain.LatestExpression {
+func (v *astVisitor) latestExpression(ctx generated.ILatestExpressionContext) domain.LatestExpression {
 	expression := domain.LatestExpression{
 		Raw:   nodeText(ctx),
 		Field: terminalText(ctx.ID()),
@@ -167,16 +173,16 @@ func latestExpression(ctx generated.ILatestExpressionContext) domain.LatestExpre
 	}
 	if in := ctx.IN(); in != nil {
 		expression.Operator = terminalText(in)
-		expression.Value = timeIntervalValue(ctx.TimeIntervalArithmetic())
+		expression.Value = v.timeIntervalValue(ctx.TimeIntervalArithmetic())
 		return expression
 	}
 
 	expression.Operator = terminalText(ctx.COMPARISON_OPERATOR())
 	switch {
 	case ctx.PointInTimeArithmetic() != nil:
-		expression.Value = pointInTimeValue(ctx.PointInTimeArithmetic())
+		expression.Value = v.pointInTimeValue(ctx.PointInTimeArithmetic())
 	case ctx.TimeIntervalToPointInTime() != nil:
-		expression.Value = intervalToPointInTimeValue(ctx.TimeIntervalToPointInTime())
+		expression.Value = v.intervalToPointInTimeValue(ctx.TimeIntervalToPointInTime())
 	case ctx.SIGNED_INTEGER() != nil:
 		expression.Value = domain.FilterValue{Kind: domain.FilterValueNumber, Raw: terminalText(ctx.SIGNED_INTEGER())}
 	case ctx.FLOAT() != nil:
@@ -187,7 +193,7 @@ func latestExpression(ctx generated.ILatestExpressionContext) domain.LatestExpre
 	return expression
 }
 
-func pointInTimeValue(ctx generated.IPointInTimeArithmeticContext) domain.FilterValue {
+func (v *astVisitor) pointInTimeValue(ctx generated.IPointInTimeArithmeticContext) domain.FilterValue {
 	raw := nodeText(ctx)
 	value := domain.FilterValue{
 		Kind:       domain.FilterValuePointInTime,
@@ -198,11 +204,15 @@ func pointInTimeValue(ctx generated.IPointInTimeArithmeticContext) domain.Filter
 	if ctx == nil {
 		return value
 	}
+	pointInTime, ok := v.parsePointInTime(ctx.PointInTimeOrFunction())
+	if ok {
+		value.Raw = timeexpr.FormatUTC(pointInTime)
+	}
 	value.TimeZone = timeZone(ctx.PointInTimeOrFunction())
 	return value
 }
 
-func timeIntervalValue(ctx generated.ITimeIntervalArithmeticContext) domain.FilterValue {
+func (v *astVisitor) timeIntervalValue(ctx generated.ITimeIntervalArithmeticContext) domain.FilterValue {
 	raw := nodeText(ctx)
 	value := domain.FilterValue{
 		Kind:       domain.FilterValueTimeInterval,
@@ -218,10 +228,10 @@ func timeIntervalValue(ctx generated.ITimeIntervalArithmeticContext) domain.Filt
 		if interval := timeIntervalOrFunction.TimeInterval(); interval != nil {
 			points := interval.AllPOINT_IN_TIME()
 			if len(points) > 0 {
-				value.Start = terminalText(points[0])
+				value.Start = v.normalizedPointInTimeToken(terminalText(points[0]), v.effectiveTimeZone(value.TimeZone))
 			}
 			if len(points) > 1 {
-				value.End = terminalText(points[1])
+				value.End = v.normalizedPointInTimeToken(terminalText(points[1]), v.effectiveTimeZone(value.TimeZone))
 			}
 		}
 	}
@@ -231,13 +241,70 @@ func timeIntervalValue(ctx generated.ITimeIntervalArithmeticContext) domain.Filt
 	return value
 }
 
-func intervalToPointInTimeValue(ctx generated.ITimeIntervalToPointInTimeContext) domain.FilterValue {
+func (v *astVisitor) intervalToPointInTimeValue(ctx generated.ITimeIntervalToPointInTimeContext) domain.FilterValue {
 	raw := nodeText(ctx)
 	return domain.FilterValue{
 		Kind:     domain.FilterValueTimeIntervalPointTime,
 		Raw:      raw,
 		Function: parseFunctionName(raw),
 	}
+}
+
+func (v *astVisitor) parsePointInTime(ctx generated.IPointInTimeOrFunctionContext) (time.Time, bool) {
+	if ctx == nil {
+		return time.Time{}, false
+	}
+	if point := ctx.POINT_IN_TIME(); point != nil {
+		return v.parsePointInTimeToken(terminalText(point), v.effectiveTimeZone(""))
+	}
+	if ctx.POINT_IN_TIME_FUNCTION_NAME() != nil {
+		return time.Now().UTC(), true
+	}
+	if ctx.POINT_IN_TIME_UTC_FUNCTION_NAME() != nil {
+		zone := terminalText(ctx.TIME_ZONE_IANA())
+		if point := ctx.POINT_IN_TIME(); point != nil {
+			return v.parsePointInTimeToken(terminalText(point), zone)
+		}
+		return time.Now().UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func (v *astVisitor) normalizedPointInTimeToken(raw string, timeZone string) string {
+	point, ok := v.parsePointInTimeToken(raw, timeZone)
+	if !ok {
+		return raw
+	}
+	return timeexpr.FormatUTC(point)
+}
+
+func (v *astVisitor) parsePointInTimeToken(raw string, timeZone string) (time.Time, bool) {
+	loc, err := timeexpr.LoadLocation(v.effectiveTimeZone(timeZone))
+	if err != nil {
+		v.errors = append(v.errors, fmt.Sprintf("invalid timezone %q", v.effectiveTimeZone(timeZone)))
+		return time.Time{}, false
+	}
+	point, err := timeexpr.ParsePointInTimeToken(raw, loc)
+	if err != nil {
+		v.errors = append(v.errors, err.Error())
+		return time.Time{}, false
+	}
+	return point, true
+}
+
+func (v *astVisitor) effectiveTimeZone(timeZone string) string {
+	if strings.TrimSpace(timeZone) != "" {
+		return timeZone
+	}
+	return v.timeZone
+}
+
+func (v *astVisitor) hasErrors() bool {
+	return len(v.errors) > 0
+}
+
+func (v *astVisitor) message() string {
+	return strings.Join(v.errors, "\n")
 }
 
 func rankOverBound(ctx generated.IRankOverFilterContext) domain.RankOverBound {

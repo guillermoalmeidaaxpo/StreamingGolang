@@ -19,13 +19,13 @@ func New() *Parser {
 	return &Parser{}
 }
 
-func (p *Parser) Parse(ctx context.Context, expressions []string) (transactional.FilterSet, error) {
+func (p *Parser) Parse(ctx context.Context, expressions []string, filterTimeZone string) (transactional.FilterSet, error) {
 	nodes := make([]domain.FilterNode, 0, len(expressions))
 	for _, expression := range expressions {
 		if err := ctx.Err(); err != nil {
 			return transactional.FilterSet{}, err
 		}
-		parsed, err := p.parseExpression(expression)
+		parsed, err := p.parseExpression(expression, filterTimeZone)
 		if err != nil {
 			return transactional.FilterSet{}, err
 		}
@@ -35,7 +35,7 @@ func (p *Parser) Parse(ctx context.Context, expressions []string) (transactional
 	return transactional.FilterSet{Expressions: expressions, Nodes: nodes}, nil
 }
 
-func (p *Parser) parseExpression(expression string) ([]domain.FilterNode, error) {
+func (p *Parser) parseExpression(expression string, filterTimeZone string) ([]domain.FilterNode, error) {
 	if strings.TrimSpace(expression) == "" {
 		return nil, apperr.New(apperr.Invalid, "filter expression cannot be empty")
 	}
@@ -60,7 +60,11 @@ func (p *Parser) parseExpression(expression string) ([]domain.FilterNode, error)
 		return nil, apperr.New(apperr.Invalid, "invalid filter expression")
 	}
 
-	result := tree.Accept(newASTVisitor())
+	visitor := newASTVisitor(filterTimeZone)
+	result := tree.Accept(visitor)
+	if visitor.hasErrors() {
+		return nil, apperr.New(apperr.Invalid, visitor.message())
+	}
 	nodes, ok := result.([]domain.FilterNode)
 	if !ok {
 		return nil, apperr.New(apperr.Invalid, "invalid filter expression")

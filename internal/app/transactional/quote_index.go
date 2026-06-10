@@ -10,6 +10,7 @@ import (
 
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 const referenceTimeField = "ReferenceTime"
@@ -257,11 +258,8 @@ func ParsePointTime(raw string, loc *time.Location) (time.Time, error) {
 		loc = time.UTC
 	}
 
-	var parsed time.Time
-	var err error
-
 	if strings.EqualFold(base, "now()") {
-		parsed = time.Now().In(loc)
+		parsed := time.Now().In(loc)
 		if arithmeticOperator == "" {
 			return parsed.UTC(), nil
 		}
@@ -272,23 +270,18 @@ func ParsePointTime(raw string, loc *time.Location) (time.Time, error) {
 		return res.UTC(), nil
 	}
 
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		parsed, err = time.Parse(layout, base)
-		if err != nil {
-			parsed, err = time.ParseInLocation(layout, base, loc)
-		}
-		if err == nil {
-			if arithmeticOperator == "" {
-				return parsed.UTC(), nil
-			}
-			res, err := applyPeriod(parsed, arithmeticOperator, period)
-			if err != nil {
-				return time.Time{}, err
-			}
-			return res.UTC(), nil
-		}
+	parsed, err := timeexpr.ParsePointInTime(base, loc)
+	if err != nil {
+		return time.Time{}, err
 	}
-	return time.Time{}, err
+	if arithmeticOperator == "" {
+		return parsed.UTC(), nil
+	}
+	res, err := applyPeriod(parsed, arithmeticOperator, period)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return res.UTC(), nil
 }
 
 func splitPointTimeArithmetic(raw string) (base, operator, period string) {
@@ -418,10 +411,7 @@ func intervalPointTime(raw string, loc *time.Location) (time.Time, bool, error) 
 }
 
 func loadLocation(name string) (*time.Location, error) {
-	if name == "" {
-		return time.UTC, nil
-	}
-	return time.LoadLocation(name)
+	return timeexpr.LoadLocation(name)
 }
 
 func invalidReferenceTime(raw string, err error) error {
