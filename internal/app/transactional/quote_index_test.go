@@ -19,7 +19,7 @@ func TestFilterQuoteIndexPlannerGeneratesIndicesFromReferenceTimeInterval(t *tes
 		t.Fatalf("plan quote indices failed: %v", err)
 	}
 
-	want := []int{20221231, 20230101, 20230102, 20230103, 20230104}
+	want := []int{20221230, 20221231, 20230101, 20230102, 20230103, 20230104, 20230105}
 	if !reflect.DeepEqual(indices, want) {
 		t.Fatalf("indices = %#v, want %#v", indices, want)
 	}
@@ -54,7 +54,7 @@ func TestFilterQuoteIndexPlannerIntersectsReferenceTimeBounds(t *testing.T) {
 		t.Fatalf("plan quote indices failed: %v", err)
 	}
 
-	want := []int{20230101, 20230102, 20230103, 20230104, 20230105}
+	want := []int{20221231, 20230101, 20230102, 20230103, 20230104, 20230105, 20230106}
 	if !reflect.DeepEqual(indices, want) {
 		t.Fatalf("indices = %#v, want %#v", indices, want)
 	}
@@ -82,7 +82,7 @@ func TestFilterQuoteIndexPlannerIgnoresNonReferenceTimeFilters(t *testing.T) {
 	}
 }
 
-func TestFilterQuoteIndexPlannerSkipsOpenEndedReferenceTimeWindow(t *testing.T) {
+func TestFilterQuoteIndexPlannerGeneratesOpenEndedReferenceTimeWindow(t *testing.T) {
 	indices, err := FilterQuoteIndexPlanner{}.PlanQuoteIndices(context.Background(), Command{
 		Filters: FilterSet{Nodes: []domain.FilterNode{
 			referenceTimePoint(">=", "2023-01-02T10:00:00"),
@@ -92,7 +92,10 @@ func TestFilterQuoteIndexPlannerSkipsOpenEndedReferenceTimeWindow(t *testing.T) 
 	if err != nil {
 		t.Fatalf("plan quote indices failed: %v", err)
 	}
-	if indices != nil {
-		t.Fatalf("indices = %#v, want nil", indices)
+	if len(indices) == 0 {
+		t.Fatal("indices is empty, want CMDP open-ended range")
+	}
+	if indices[0] != 20221231 {
+		t.Fatalf("first index = %d, want 20221231", indices[0])
 	}
 }

@@ -13,6 +13,7 @@ import (
 )
 
 const referenceTimeField = "ReferenceTime"
+const cmdpDefaultLookBackYears = -3
 
 var isoPeriodPattern = regexp.MustCompile(`^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$`)
 
@@ -27,6 +28,20 @@ func (FilterQuoteIndexPlanner) PlanQuoteIndices(_ context.Context, command Comma
 	window, found, err := referenceTimeWindow(command.Filters.Nodes, loc)
 	if err != nil || !found {
 		return nil, err
+	}
+	if window.start == nil || window.end == nil {
+		now := quoteIndexDate(time.Now().UTC())
+		if window.start == nil && window.end != nil {
+			start := window.end.AddDate(cmdpDefaultLookBackYears, 0, 0)
+			window.start = &start
+		} else if window.start != nil && window.end == nil {
+			end := now
+			if window.start.After(end) {
+				end = *window.start
+			}
+			end = end.AddDate(0, 0, 2)
+			window.end = &end
+		}
 	}
 	if window.start == nil || window.end == nil {
 		return nil, nil
@@ -76,20 +91,28 @@ func referenceTimeComparisonWindow(filter domain.ComparisonFilter, loc *time.Loc
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
-		return paddedPointWindow(point), true, nil
+		return cmdpEqualityQuoteIndexWindow(point), true, nil
 	case filter.Operator == ">" || filter.Operator == ">=":
 		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
-		start := quoteIndexDate(point).AddDate(0, 0, -1)
+		adjustment := -2
+		if filter.Operator == ">" {
+			adjustment = -3
+		}
+		start := quoteIndexDate(point).AddDate(0, 0, adjustment)
 		return quoteIndexWindow{start: &start}, true, nil
 	case filter.Operator == "<" || filter.Operator == "<=":
 		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
-		end := quoteIndexDate(point).AddDate(0, 0, 1)
+		adjustment := 2
+		if filter.Operator == "<" {
+			adjustment = 3
+		}
+		end := quoteIndexDate(point).AddDate(0, 0, adjustment)
 		return quoteIndexWindow{end: &end}, true, nil
 	default:
 		return quoteIndexWindow{}, false, nil
@@ -106,8 +129,8 @@ func intervalQuoteIndexWindow(value domain.FilterValue, loc *time.Location) (quo
 		return quoteIndexWindow{}, ok, err
 	}
 
-	windowStart := quoteIndexDate(start).AddDate(0, 0, -1)
-	windowEnd := quoteIndexDate(end).AddDate(0, 0, 1)
+	windowStart := quoteIndexDate(start).AddDate(0, 0, -2)
+	windowEnd := quoteIndexDate(end).AddDate(0, 0, 2)
 	return quoteIndexWindow{start: &windowStart, end: &windowEnd}, true, nil
 }
 
@@ -187,9 +210,11 @@ func intervalFunctionBounds(raw string, loc *time.Location) (time.Time, time.Tim
 	}
 }
 
-func paddedPointWindow(point time.Time) quoteIndexWindow {
+func cmdpEqualityQuoteIndexWindow(point time.Time) quoteIndexWindow {
 	day := quoteIndexDate(point)
-	return quoteIndexWindow{start: &day, end: &day}
+	start := day.AddDate(0, 0, -1)
+	end := day.AddDate(0, 0, 1)
+	return quoteIndexWindow{start: &start, end: &end}
 }
 
 func intersectQuoteIndexWindow(w1, w2 quoteIndexWindow) quoteIndexWindow {

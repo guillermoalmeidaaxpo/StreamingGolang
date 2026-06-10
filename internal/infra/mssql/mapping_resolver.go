@@ -43,43 +43,89 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 
 	mapping := mappings[0]
 	referenceTimeColumn := referenceTimeSourceColumn(mapping)
-	if strings.TrimSpace(referenceTimeColumn) == "" {
+	if strings.TrimSpace(referenceTimeColumn) == "" || strings.TrimSpace(mapping.IndexField) == "" {
 		return time.Now().UTC(), nil
 	}
-
-	query := fmt.Sprintf(
-		"SELECT MAX(%s) FROM %s AS [d] WHERE %s = @id",
-		qualify(referenceTimeColumn),
-		quoteTable(mapping.ViewName),
-		qualify(cmdpIdentifierColumn),
-	)
 
 	start := time.Now()
-	var watermark sql.NullTime
-	err := r.cmdpSQLDB.QueryRowContext(ctx, query, sql.Named("id", int64(mapping.ID))).Scan(&watermark)
+	var minReferenceTime sql.NullTime
+	var maxReferenceTime sql.NullTime
+	var minDeliveryStart sql.NullTime
+	var maxDeliveryStart sql.NullTime
+
+	commandText := calculateMinMaxReferenceTimeDeliveryStartCommandText()
+	deliveryStartColumn := deliveryStartSourceColumn(mapping)
+
+	r.logger.InfoContext(ctx, "reading CMDP filter limits",
+		slog.Int64("identifier", int64(mapping.ID)),
+		slog.String("view", mapping.ViewName),
+		slog.String("reference_time_index_column", mapping.IndexField),
+		slog.String("reference_time_column", referenceTimeColumn),
+		slog.String("delivery_start_column", deliveryStartColumn),
+		slog.Bool("get_min_reference_time", false),
+		slog.Bool("get_max_reference_time", true),
+		slog.Bool("get_min_max_delivery_start", false),
+		slog.String("command", compactSQL(commandText)),
+	)
+
+	_, err := r.cmdpSQLDB.ExecContext(ctx, commandText,
+		sql.Named("Id", int64(mapping.ID)),
+		sql.Named("referenceTimeIndexedFieldName", mapping.IndexField),
+		sql.Named("referenceTimeFieldName", referenceTimeColumn),
+		sql.Named("deliveryStartFieldName", deliveryStartColumn),
+		sql.Named("getMinReferenceTime", false),
+		sql.Named("getMaxReferenceTime", true),
+		sql.Named("getMinMaxDeliveryStart", false),
+		sql.Named("schemaQualifiedViewName", mapping.ViewName),
+		sql.Named("minReferenceTime", sql.Out{Dest: &minReferenceTime}),
+		sql.Named("maxReferenceTime", sql.Out{Dest: &maxReferenceTime}),
+		sql.Named("minDeliveryStart", sql.Out{Dest: &minDeliveryStart}),
+		sql.Named("maxDeliveryStart", sql.Out{Dest: &maxDeliveryStart}),
+	)
 	if err != nil {
-		r.logger.WarnContext(ctx, "failed to get watermark from CMDP",
+		r.logger.ErrorContext(ctx, "read CMDP filter limits failed",
 			slog.Int64("identifier", int64(mapping.ID)),
 			slog.String("view", mapping.ViewName),
+			slog.String("reference_time_index_column", mapping.IndexField),
 			slog.String("reference_time_column", referenceTimeColumn),
+			slog.String("delivery_start_column", deliveryStartColumn),
+			slog.Duration("duration", time.Since(start)),
 			slog.Any("error", err),
 		)
-		return time.Now().UTC(), nil
+		return time.Time{}, apperr.Wrap(apperr.Unavailable, "read CMDP filter limits", err)
 	}
 
-	res := watermark.Time
-	if !watermark.Valid {
+	res := maxReferenceTime.Time
+	if !maxReferenceTime.Valid {
 		res = time.Now().UTC()
 	}
 
-	r.logger.InfoContext(ctx, "watermark retrieved",
+	r.logger.InfoContext(ctx, "CMDP filter limits read",
 		slog.Int64("identifier", int64(mapping.ID)),
 		slog.String("view", mapping.ViewName),
 		slog.String("reference_time_column", referenceTimeColumn),
 		slog.Time("watermark", res),
+		slog.Bool("watermark_found", maxReferenceTime.Valid),
 		slog.Duration("duration", time.Since(start)),
 	)
 	return res.UTC(), nil
+}
+
+func calculateMinMaxReferenceTimeDeliveryStartCommandText() string {
+	return `
+EXEC [MDS].[CalculateMinMaxReferenceTimeDeliveryStart]
+	@Id = @Id,
+	@referenceTimeIndexedFieldName = @referenceTimeIndexedFieldName,
+	@referenceTimeFieldName = @referenceTimeFieldName,
+	@deliveryStartFieldName = @deliveryStartFieldName,
+	@getMinReferenceTime = @getMinReferenceTime,
+	@getMaxReferenceTime = @getMaxReferenceTime,
+	@getMinMaxDeliveryStart = @getMinMaxDeliveryStart,
+	@schemaQualifiedViewName = @schemaQualifiedViewName,
+	@minReferenceTime = @minReferenceTime OUTPUT,
+	@maxReferenceTime = @maxReferenceTime OUTPUT,
+	@minDeliveryStart = @minDeliveryStart OUTPUT,
+	@maxDeliveryStart = @maxDeliveryStart OUTPUT`
 }
 
 func referenceTimeSourceColumn(mapping domain.Mapping) string {
@@ -89,6 +135,24 @@ func referenceTimeSourceColumn(mapping domain.Mapping) string {
 		}
 	}
 	return "ReferenceTime"
+}
+
+func deliveryStartSourceColumn(mapping domain.Mapping) string {
+	for _, column := range mapping.Columns {
+		if isDeliveryStartColumn(column.MDSName) && strings.TrimSpace(column.SourceName) != "" {
+			return column.SourceName
+		}
+	}
+	return ""
+}
+
+func isDeliveryStartColumn(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "deliverystart", "underlyingstart", "optionstart":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Identifier, category domain.DataCategory, stage string) ([]domain.Mapping, error) {

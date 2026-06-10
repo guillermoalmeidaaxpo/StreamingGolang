@@ -150,16 +150,16 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 		return []Command{command}, nil
 	}
 
+	filterLocation, _ := loadLocation(command.FilterTimeZone)
 	watermark, err := p.mappings.GetWatermark(ctx, command.Mappings)
 	if err != nil {
 		return nil, err
 	}
 
-	filterLocation, _ := loadLocation(command.FilterTimeZone)
-	if equalityPoint, ok, err := referenceTimeEqualityPoint(command.Filters.Nodes, filterLocation); err != nil {
+	if point, ok, err := referenceTimeEqualityPoint(command.Filters.Nodes, filterLocation); err != nil {
 		return nil, err
 	} else if ok {
-		if equalityPoint.Before(watermark) {
+		if point.Before(watermark) {
 			command.Source = domain.SourceCassandra
 		} else {
 			command.Source = domain.SourceCMDP

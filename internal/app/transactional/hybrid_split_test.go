@@ -11,16 +11,18 @@ import (
 
 type watermarkResolver struct {
 	fixedMappingResolver
-	watermark time.Time
+	watermark       time.Time
+	watermarkCalled bool
 }
 
-func (r watermarkResolver) GetWatermark(context.Context, []domain.Mapping) (time.Time, error) {
+func (r *watermarkResolver) GetWatermark(context.Context, []domain.Mapping) (time.Time, error) {
+	r.watermarkCalled = true
 	return r.watermark, nil
 }
 
 func TestPlannerSplitsHybridCommand(t *testing.T) {
 	watermark := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	resolver := watermarkResolver{
+	resolver := &watermarkResolver{
 		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
 			ID:           536013751,
 			DataCategory: domain.Curves,
@@ -74,7 +76,7 @@ func TestPlannerSplitsHybridCommand(t *testing.T) {
 
 func TestPlannerDoesNotHybridSplitWithoutReferenceTimeFilter(t *testing.T) {
 	watermark := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	resolver := watermarkResolver{
+	resolver := &watermarkResolver{
 		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
 			ID:           536013751,
 			DataCategory: domain.Curves,
@@ -113,7 +115,7 @@ func TestPlannerDoesNotHybridSplitWithoutReferenceTimeFilter(t *testing.T) {
 
 func TestPlannerRoutesMidnightEqualityToCassandraQuoteIndex(t *testing.T) {
 	watermark := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	resolver := watermarkResolver{
+	resolver := &watermarkResolver{
 		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
 			ID:           536013751,
 			DataCategory: domain.Curves,
@@ -158,11 +160,14 @@ func TestPlannerRoutesMidnightEqualityToCassandraQuoteIndex(t *testing.T) {
 	if !reflect.DeepEqual(plan.Steps[0].Command.QuoteIndices, want) {
 		t.Fatalf("quote indices = %#v, want %#v", plan.Steps[0].Command.QuoteIndices, want)
 	}
+	if !resolver.watermarkCalled {
+		t.Fatal("watermark was not called for equality filter")
+	}
 }
 
 func TestPlannerSkipsNonMidnightEqualityCassandraBatch(t *testing.T) {
 	watermark := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	resolver := watermarkResolver{
+	resolver := &watermarkResolver{
 		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
 			ID:           536013751,
 			DataCategory: domain.Curves,
@@ -199,5 +204,56 @@ func TestPlannerSkipsNonMidnightEqualityCassandraBatch(t *testing.T) {
 	}
 	if len(plan.Steps) != 0 {
 		t.Fatalf("expected no Cassandra batch for non-midnight equality, got %d steps", len(plan.Steps))
+	}
+	if !resolver.watermarkCalled {
+		t.Fatal("watermark was not called for equality filter")
+	}
+}
+
+func TestPlannerRoutesEqualityAtWatermarkToCMDP(t *testing.T) {
+	watermark := time.Date(2024, 4, 26, 20, 0, 0, 0, time.UTC)
+	resolver := &watermarkResolver{
+		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "test:1",
+			ViewName:     "TestView",
+			IndexField:   "QuoteDateIndex",
+			SplitQuery:   true,
+		}}},
+		watermark: watermark,
+	}
+
+	planner := NewPlanner(
+		WithMappingResolver(resolver),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.Curves,
+		Stage:        "development",
+		Mode:         ModeJSON,
+	}, []Request{{
+		IDs: []domain.Identifier{536013751},
+		Filters: &Filters{
+			FilterTimeZone: "Europe/Zurich",
+			Parsed: FilterSet{Nodes: []domain.FilterNode{
+				referenceTimePoint("=", "2024-04-26T22:00:00"),
+			}},
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("expected 1 CMDP step, got %d", len(plan.Steps))
+	}
+	if plan.Steps[0].Command.Source != domain.SourceCMDP {
+		t.Fatalf("expected source CMDP, got %q", plan.Steps[0].Command.Source)
+	}
+	if !resolver.watermarkCalled {
+		t.Fatal("watermark was not called for equality filter")
 	}
 }
