@@ -112,6 +112,9 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 					if err != nil {
 						return Plan{}, err
 					}
+					if len(hCommand.QuoteIndices) == 0 && hasReferenceTimeFilter(hCommand.Filters.Nodes) {
+						continue
+					}
 				} else {
 					commandQuoteIndices, err := p.quoteIndices.PlanQuoteIndices(ctx, hCommand)
 					if err != nil {
@@ -152,9 +155,21 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 		return nil, err
 	}
 
+	filterLocation, _ := loadLocation(command.FilterTimeZone)
+	if equalityPoint, ok, err := referenceTimeEqualityPoint(command.Filters.Nodes, filterLocation); err != nil {
+		return nil, err
+	} else if ok {
+		if equalityPoint.Before(watermark) {
+			command.Source = domain.SourceCassandra
+		} else {
+			command.Source = domain.SourceCMDP
+		}
+		return []Command{command}, nil
+	}
+
 	// Analyze ReferenceTime filters to decide how to split
 	location, _ := loadCassandraLocation(cassandraTimeZone(command.Mappings))
-	limits, err := cassandraReferenceTimeRange(command.Filters.Nodes, location, time.Now().UTC(), location)
+	limits, err := cassandraReferenceTimeRange(command.Filters.Nodes, location, time.Now().UTC(), filterLocation)
 	if err != nil {
 		return nil, err
 	}
@@ -216,6 +231,18 @@ func hasReferenceTimeFilter(nodes []domain.FilterNode) bool {
 		}
 	}
 	return false
+}
+
+func referenceTimeEqualityPoint(nodes []domain.FilterNode, loc *time.Location) (time.Time, bool, error) {
+	for _, node := range nodes {
+		filter, ok := node.(domain.ComparisonFilter)
+		if !ok || !strings.EqualFold(filter.Field, referenceTimeField) || filter.Operator != "=" {
+			continue
+		}
+		point, ok, err := pointTime(filter.Value, loc)
+		return point, ok, err
+	}
+	return time.Time{}, false, nil
 }
 
 func commandsForRequest(requestContext RequestContext, request Request, mappings []Mapping) []Command {

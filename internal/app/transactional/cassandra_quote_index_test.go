@@ -34,6 +34,54 @@ func TestCassandraQuoteIndexPlannerGeneratesIndicesInMDOTimeZone(t *testing.T) {
 	}
 }
 
+func TestCassandraQuoteIndexPlannerGeneratesIndexForMidnightEquality(t *testing.T) {
+	indices, err := CassandraQuoteIndexPlanner{}.PlanQuoteIndices(context.Background(), Command{
+		FilterTimeZone: "Europe/Zurich",
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: "=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2024-04-26T00:00:00",
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{ID: 536013751, Source: domain.SourceCassandra}},
+	})
+	if err != nil {
+		t.Fatalf("PlanQuoteIndices returned error: %v", err)
+	}
+
+	want := []int{20240426}
+	if !reflect.DeepEqual(indices, want) {
+		t.Fatalf("indices = %#v, want %#v", indices, want)
+	}
+}
+
+func TestCassandraQuoteIndexPlannerDoesNotGenerateIndexForNonMidnightEquality(t *testing.T) {
+	indices, err := CassandraQuoteIndexPlanner{}.PlanQuoteIndices(context.Background(), Command{
+		FilterTimeZone: "Europe/Zurich",
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: "=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2024-04-26T22:00:00",
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{ID: 536013751, Source: domain.SourceCassandra}},
+	})
+	if err != nil {
+		t.Fatalf("PlanQuoteIndices returned error: %v", err)
+	}
+	if len(indices) != 0 {
+		t.Fatalf("indices = %#v, want empty for non-midnight equality", indices)
+	}
+}
+
 func TestCassandraQuoteIndexPlannerUsesDefaultLookbackForOpenEndedReferenceTime(t *testing.T) {
 	indices, err := CassandraQuoteIndexPlanner{
 		Now: func() time.Time {

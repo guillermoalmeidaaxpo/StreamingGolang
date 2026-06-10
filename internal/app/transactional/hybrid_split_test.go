@@ -2,6 +2,7 @@ package transactional
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -107,5 +108,96 @@ func TestPlannerDoesNotHybridSplitWithoutReferenceTimeFilter(t *testing.T) {
 	}
 	if plan.Steps[0].Command.Source != domain.SourceCassandra {
 		t.Fatalf("expected source to remain Cassandra, got %q", plan.Steps[0].Command.Source)
+	}
+}
+
+func TestPlannerRoutesMidnightEqualityToCassandraQuoteIndex(t *testing.T) {
+	watermark := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resolver := watermarkResolver{
+		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "test:1",
+			ViewName:     "TestView",
+			IndexField:   "QuoteDateIndex",
+			SplitQuery:   true,
+		}}},
+		watermark: watermark,
+	}
+
+	planner := NewPlanner(
+		WithMappingResolver(resolver),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.Curves,
+		Stage:        "development",
+		Mode:         ModeJSON,
+	}, []Request{{
+		IDs: []domain.Identifier{536013751},
+		Filters: &Filters{
+			FilterTimeZone: "Europe/Zurich",
+			Parsed: FilterSet{Nodes: []domain.FilterNode{
+				referenceTimePoint("=", "2024-04-26T00:00:00"),
+			}},
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("expected 1 Cassandra step, got %d", len(plan.Steps))
+	}
+	if plan.Steps[0].Command.Source != domain.SourceCassandra {
+		t.Fatalf("expected source Cassandra, got %q", plan.Steps[0].Command.Source)
+	}
+	want := []int{20240426}
+	if !reflect.DeepEqual(plan.Steps[0].Command.QuoteIndices, want) {
+		t.Fatalf("quote indices = %#v, want %#v", plan.Steps[0].Command.QuoteIndices, want)
+	}
+}
+
+func TestPlannerSkipsNonMidnightEqualityCassandraBatch(t *testing.T) {
+	watermark := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	resolver := watermarkResolver{
+		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "test:1",
+			ViewName:     "TestView",
+			IndexField:   "QuoteDateIndex",
+			SplitQuery:   true,
+		}}},
+		watermark: watermark,
+	}
+
+	planner := NewPlanner(
+		WithMappingResolver(resolver),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.Curves,
+		Stage:        "development",
+		Mode:         ModeJSON,
+	}, []Request{{
+		IDs: []domain.Identifier{536013751},
+		Filters: &Filters{
+			FilterTimeZone: "Europe/Zurich",
+			Parsed: FilterSet{Nodes: []domain.FilterNode{
+				referenceTimePoint("=", "2024-04-26T22:00:00"),
+			}},
+		},
+	}})
+
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+	if len(plan.Steps) != 0 {
+		t.Fatalf("expected no Cassandra batch for non-midnight equality, got %d steps", len(plan.Steps))
 	}
 }
