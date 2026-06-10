@@ -188,9 +188,8 @@ func intervalFunctionBounds(raw string, loc *time.Location) (time.Time, time.Tim
 }
 
 func paddedPointWindow(point time.Time) quoteIndexWindow {
-	start := quoteIndexDate(point).AddDate(0, 0, -1)
-	end := quoteIndexDate(point).AddDate(0, 0, 1)
-	return quoteIndexWindow{start: &start, end: &end}
+	day := quoteIndexDate(point)
+	return quoteIndexWindow{start: &day, end: &day}
 }
 
 func intersectQuoteIndexWindow(w1, w2 quoteIndexWindow) quoteIndexWindow {
