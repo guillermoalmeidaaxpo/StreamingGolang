@@ -109,6 +109,56 @@ func TestCMDPQueryBuilderRejectsUnsupportedLatestFilters(t *testing.T) {
 	}
 }
 
+func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory: domain.Curves,
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: ">=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2025-08-23T00:00:00",
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           488109751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceHyperscale,
+			Columns: []domain.ColumnMapping{
+				{MDSName: "MdoId", SourceName: "MdoId", IsKey: true, IsProjectable: false, KeyColumnOrdering: &keyOrder},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true, IsProjectable: false},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "FROM [Api].[VI_Curve] AS [d]")
+	assertContains(t, statement, "[d].[MdoId] = @id")
+	assertContains(t, statement, "[d].[ReferenceTime] >= @p0")
+	assertContains(t, statement, "CAST(JSON_VALUE([d].[CurveValue], '$.\"Value\"') AS FLOAT) AS [Value]")
+	assertContains(t, statement, "[d].[Deleted] = 0")
+
+	if queries[0].Source != domain.SourceHyperscale {
+		t.Fatalf("source = %q, want hyperscale", queries[0].Source)
+	}
+	if queries[0].Parameters["id"] != int64(488109751) {
+		t.Fatalf("id parameter = %#v", queries[0].Parameters["id"])
+	}
+}
+
 func assertContains(t *testing.T, text, substring string) {
 	t.Helper()
 	if !strings.Contains(text, substring) {

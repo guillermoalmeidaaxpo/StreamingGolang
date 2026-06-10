@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -43,6 +44,7 @@ func main() {
 
 	mappingResolver := transactional.MappingResolver(transactional.StaticMappingResolver{})
 	queryBuilder := transactional.QueryBuilder(transactional.PlaceholderQueryBuilder{})
+	var mdsDB *sql.DB
 	cmdpMappingDB, err := mssql.OpenSQLServer(cfg.ConnectionStrings.CmdpMappingDatabase)
 	if err != nil {
 		logger.Error("cmdp mapping sql configuration failed", slog.Any("error", err))
@@ -50,7 +52,7 @@ func main() {
 	}
 	if cmdpMappingDB != nil {
 		defer cmdpMappingDB.Close()
-		mdsDB, err := mssql.OpenSQLServer(cfg.ConnectionStrings.MdsDatabase)
+		mdsDB, err = mssql.OpenSQLServer(cfg.ConnectionStrings.MdsDatabase)
 		if err != nil {
 			logger.Error("mds mapping sql configuration failed", slog.Any("error", err))
 			os.Exit(1)
@@ -59,7 +61,10 @@ func main() {
 			defer mdsDB.Close()
 		}
 		mappingResolver = mssql.NewMappingResolver(cmdpMappingDB, mdsDB, logger)
-		queryBuilder = mssql.NewCMDPQueryBuilder()
+		queryBuilder = transactional.NewCompositeQueryBuilder(
+			mssql.NewCMDPQueryBuilder(),
+			mssql.NewHyperscaleQueryBuilder(),
+		)
 	}
 
 	redisClient, err := redis.Open(cfg.Redis)
@@ -93,7 +98,9 @@ func main() {
 	if cmdpSQLDB != nil {
 		defer cmdpSQLDB.Close()
 		repositories[domain.SourceCMDP] = mssql.NewRepository(cmdpSQLDB)
-		repositories[domain.SourceHyperscale] = mssql.NewRepository(cmdpSQLDB)
+	}
+	if mdsDB != nil {
+		repositories[domain.SourceHyperscale] = mssql.NewRepository(mdsDB)
 	}
 	if cassandraSession != nil {
 		repositories[domain.SourceCassandra] = cassandra.NewRepository(cassandraSession)
