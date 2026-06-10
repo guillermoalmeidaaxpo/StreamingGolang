@@ -2,6 +2,7 @@ package transactional
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"streaming-golang/internal/domain"
@@ -143,9 +144,8 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 }
 
 func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command) ([]Command, error) {
-	// If no Cassandra mappings or aggregations are present, route entirely to CMDP
-	if !anyCassandra(command.Mappings) || command.HasAggregations {
-		command.Source = domain.SourceCMDP
+	// Only split if the command is eligible
+	if command.HasAggregations || !isEligibleForHybridSplit(command.Mappings) {
 		return []Command{command}, nil
 	}
 
@@ -195,6 +195,20 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 	})
 
 	return []Command{cassandraCmd, cmdpCmd}, nil
+}
+
+func isEligibleForHybridSplit(mappings []Mapping) bool {
+	if len(mappings) == 0 {
+		return false
+	}
+	for _, m := range mappings {
+		// Only split if explicitly allowed AND it has a Cassandra ID
+		// (if it has no Cassandra ID, there is nothing to split to)
+		if !m.SplitQuery || strings.TrimSpace(m.CassandraID) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func commandsForRequest(requestContext RequestContext, request Request, mappings []Mapping) []Command {
