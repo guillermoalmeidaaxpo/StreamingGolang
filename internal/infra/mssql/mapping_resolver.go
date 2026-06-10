@@ -37,26 +37,34 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 		return time.Now().UTC(), nil
 	}
 
-	// For simplicity, we assume the watermark is the max ReferenceTime in the CMDP views
-	// for the requested mappings. C# uses accessDataRepository.GetMinMaxReferenceTimeDeliveryStart.
-	
-	// We'll take the first mapping as a representative for the view to query
-	if len(mappings) == 0 || mappings[0].ViewName == "" {
+	if len(mappings) == 0 || strings.TrimSpace(mappings[0].ViewName) == "" {
 		return time.Now().UTC(), nil
 	}
 
-	view := mappings[0].ViewName
-	query := fmt.Sprintf("SELECT MAX(ReferenceTime) FROM %s", view)
-	
+	mapping := mappings[0]
+	referenceTimeColumn := referenceTimeSourceColumn(mapping)
+	if strings.TrimSpace(referenceTimeColumn) == "" {
+		return time.Now().UTC(), nil
+	}
+
+	query := fmt.Sprintf(
+		"SELECT MAX(%s) FROM %s AS [d] WHERE %s = @id",
+		qualify(referenceTimeColumn),
+		quoteTable(mapping.ViewName),
+		qualify(cmdpIdentifierColumn),
+	)
+
 	start := time.Now()
 	var watermark sql.NullTime
-	err := r.cmdpSQLDB.QueryRowContext(ctx, query).Scan(&watermark)
+	err := r.cmdpSQLDB.QueryRowContext(ctx, query, sql.Named("id", int64(mapping.ID))).Scan(&watermark)
 	if err != nil {
 		r.logger.WarnContext(ctx, "failed to get watermark from CMDP",
-			slog.String("view", view),
+			slog.Int64("identifier", int64(mapping.ID)),
+			slog.String("view", mapping.ViewName),
+			slog.String("reference_time_column", referenceTimeColumn),
 			slog.Any("error", err),
 		)
-		return time.Now().UTC(), nil // Fallback to now
+		return time.Now().UTC(), nil
 	}
 
 	res := watermark.Time
@@ -65,11 +73,22 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 	}
 
 	r.logger.InfoContext(ctx, "watermark retrieved",
-		slog.String("view", view),
+		slog.Int64("identifier", int64(mapping.ID)),
+		slog.String("view", mapping.ViewName),
+		slog.String("reference_time_column", referenceTimeColumn),
 		slog.Time("watermark", res),
 		slog.Duration("duration", time.Since(start)),
 	)
 	return res.UTC(), nil
+}
+
+func referenceTimeSourceColumn(mapping domain.Mapping) string {
+	for _, column := range mapping.Columns {
+		if strings.EqualFold(column.MDSName, "ReferenceTime") && strings.TrimSpace(column.SourceName) != "" {
+			return column.SourceName
+		}
+	}
+	return "ReferenceTime"
 }
 
 func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Identifier, category domain.DataCategory, stage string) ([]domain.Mapping, error) {

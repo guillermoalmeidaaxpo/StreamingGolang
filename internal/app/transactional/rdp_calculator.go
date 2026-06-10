@@ -28,15 +28,15 @@ func (RDPCalculator) Calculate(referenceTime, deliveryStart time.Time, resolutio
 	case "PT1H":
 		result = int64(del.Truncate(time.Hour).Sub(ref.Truncate(time.Hour)).Hours())
 	case "PT30M":
-		result = int64(del.Truncate(30 * time.Minute).Sub(ref.Truncate(30 * time.Minute)).Minutes() / 30)
+		result = int64(del.Truncate(30*time.Minute).Sub(ref.Truncate(30*time.Minute)).Minutes() / 30)
 	case "PT15M":
-		result = int64(del.Truncate(15 * time.Minute).Sub(ref.Truncate(15 * time.Minute)).Minutes() / 15)
+		result = int64(del.Truncate(15*time.Minute).Sub(ref.Truncate(15*time.Minute)).Minutes() / 15)
 	case "PT5M":
-		result = int64(del.Truncate(5 * time.Minute).Sub(ref.Truncate(5 * time.Minute)).Minutes() / 5)
+		result = int64(del.Truncate(5*time.Minute).Sub(ref.Truncate(5*time.Minute)).Minutes() / 5)
 	case "PT1M":
 		result = int64(del.Truncate(time.Minute).Sub(ref.Truncate(time.Minute)).Minutes())
 	case "PT4S":
-		result = int64(del.Truncate(4 * time.Second).Sub(ref.Truncate(4 * time.Second)).Seconds() / 4)
+		result = int64(del.Truncate(4*time.Second).Sub(ref.Truncate(4*time.Second)).Seconds() / 4)
 	default:
 		return nil
 	}

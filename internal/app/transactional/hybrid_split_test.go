@@ -27,6 +27,7 @@ func TestPlannerSplitsHybridCommand(t *testing.T) {
 			CassandraID:  "test:1",
 			ViewName:     "TestView",
 			IndexField:   "QuoteDateIndex",
+			SplitQuery:   true,
 		}}},
 		watermark: watermark,
 	}
@@ -67,5 +68,44 @@ func TestPlannerSplitsHybridCommand(t *testing.T) {
 	// Step 2: CMDP
 	if plan.Steps[1].Command.Source != domain.SourceCMDP {
 		t.Fatalf("expected step 1 source to be CMDP, got %q", plan.Steps[1].Command.Source)
+	}
+}
+
+func TestPlannerDoesNotHybridSplitWithoutReferenceTimeFilter(t *testing.T) {
+	watermark := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	resolver := watermarkResolver{
+		fixedMappingResolver: fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "test:1",
+			ViewName:     "TestView",
+			IndexField:   "QuoteDateIndex",
+			SplitQuery:   true,
+		}}},
+		watermark: watermark,
+	}
+
+	planner := NewPlanner(
+		WithMappingResolver(resolver),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.Curves,
+		Stage:        "development",
+		Mode:         ModeJSON,
+	}, []Request{{
+		IDs: []domain.Identifier{536013751},
+	}})
+
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("expected 1 step without ReferenceTime filter, got %d", len(plan.Steps))
+	}
+	if plan.Steps[0].Command.Source != domain.SourceCassandra {
+		t.Fatalf("expected source to remain Cassandra, got %q", plan.Steps[0].Command.Source)
 	}
 }

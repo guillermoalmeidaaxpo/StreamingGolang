@@ -99,6 +99,7 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 			if err := validateAgainstMappings(requestContext, request, command, command.Mappings); err != nil {
 				return Plan{}, err
 			}
+			command.Source = sourceFromMappings(command.Mappings)
 
 			hybridCommands, err := p.splitHybridCommand(ctx, command)
 			if err != nil {
@@ -115,9 +116,6 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 					commandQuoteIndices, err := p.quoteIndices.PlanQuoteIndices(ctx, hCommand)
 					if err != nil {
 						return Plan{}, err
-					}
-					if len(commandQuoteIndices) == 0 {
-						continue // Skip this part of the hybrid split as it contains no relevant data range
 					}
 					hCommand.QuoteIndices = commandQuoteIndices
 				}
@@ -145,7 +143,7 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 
 func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command) ([]Command, error) {
 	// Only split if the command is eligible
-	if command.HasAggregations || !isEligibleForHybridSplit(command.Mappings) {
+	if command.HasAggregations || !isEligibleForHybridSplit(command.Mappings) || !hasReferenceTimeFilter(command.Filters.Nodes) {
 		return []Command{command}, nil
 	}
 
@@ -209,6 +207,15 @@ func isEligibleForHybridSplit(mappings []Mapping) bool {
 		}
 	}
 	return true
+}
+
+func hasReferenceTimeFilter(nodes []domain.FilterNode) bool {
+	for _, node := range nodes {
+		if filter, ok := node.(domain.ComparisonFilter); ok && strings.EqualFold(filter.Field, referenceTimeField) {
+			return true
+		}
+	}
+	return false
 }
 
 func commandsForRequest(requestContext RequestContext, request Request, mappings []Mapping) []Command {
