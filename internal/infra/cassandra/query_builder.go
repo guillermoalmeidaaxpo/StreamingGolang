@@ -354,6 +354,11 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 
 func parsePointTime(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
+
+	if strings.EqualFold(raw, "now()") {
+		return time.Now().UTC(), nil
+	}
+
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
 		parsed, err := time.Parse(layout, raw)
 		if err == nil {

@@ -270,6 +270,15 @@ func parsePointTime(raw string) (time.Time, error) {
 
 	var parsed time.Time
 	var err error
+
+	if strings.EqualFold(base, "now()") {
+		parsed = time.Now().UTC()
+		if arithmeticOperator == "" {
+			return parsed, nil
+		}
+		return applyPeriod(parsed, arithmeticOperator, period)
+	}
+
 	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
 		parsed, err = time.ParseInLocation(layout, base, time.UTC)
 		if err == nil {
