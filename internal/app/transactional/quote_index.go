@@ -32,7 +32,7 @@ func (FilterQuoteIndexPlanner) PlanQuoteIndices(_ context.Context, command Comma
 		return nil, nil
 	}
 	if window.end.Before(*window.start) {
-		return nil, apperr.New(apperr.Invalid, "ReferenceTime filters produce an empty quote index window")
+		return nil, nil
 	}
 
 	return quoteIndicesBetween(*window.start, *window.end), nil

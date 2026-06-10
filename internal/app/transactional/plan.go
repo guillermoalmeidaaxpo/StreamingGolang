@@ -111,10 +111,14 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 						return Plan{}, err
 					}
 				} else {
-					hCommand.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, hCommand)
+					commandQuoteIndices, err := p.quoteIndices.PlanQuoteIndices(ctx, hCommand)
 					if err != nil {
 						return Plan{}, err
 					}
+					if len(commandQuoteIndices) == 0 {
+						continue // Skip this part of the hybrid split as it contains no relevant data range
+					}
+					hCommand.QuoteIndices = commandQuoteIndices
 				}
 
 				splitCommands := p.strategy.Plan(hCommand)
