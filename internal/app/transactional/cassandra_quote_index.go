@@ -78,16 +78,10 @@ func cassandraReferenceTimeRange(nodes []domain.FilterNode, location *time.Locat
 		case "=":
 			local := point.In(location)
 			if !isLocalMidnight(local) {
-				start := quoteIndexDate(now)
-				end := start.AddDate(0, 0, -1)
-				dateRange.start = &start
-				dateRange.end = &end
-				return dateRange, nil
+				return cassandraDateRange{}, nil
 			}
 			day := localDate(local)
-			dateRange.start = &day
-			dateRange.end = &day
-			return dateRange, nil
+			return cassandraDateRange{start: &day, end: &day}, nil
 		}
 	}
 
