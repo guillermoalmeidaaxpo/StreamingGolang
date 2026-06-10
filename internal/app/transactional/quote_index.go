@@ -248,8 +248,11 @@ func ParsePointTime(raw string, loc *time.Location) (time.Time, error) {
 		return res.UTC(), nil
 	}
 
-	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		parsed, err = time.ParseInLocation(layout, base, loc)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
+		parsed, err = time.Parse(layout, base)
+		if err != nil {
+			parsed, err = time.ParseInLocation(layout, base, loc)
+		}
 		if err == nil {
 			if arithmeticOperator == "" {
 				return parsed.UTC(), nil
