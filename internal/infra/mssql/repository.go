@@ -3,6 +3,9 @@ package mssql
 import (
 	"context"
 	"database/sql"
+	"log/slog"
+	"sort"
+	"time"
 
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/app/transactional"
@@ -10,16 +13,40 @@ import (
 )
 
 type repository struct {
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 }
 
-func NewRepository(db *sql.DB) transactional.Repository {
-	return &repository{db: db}
+func NewRepository(db *sql.DB, loggers ...*slog.Logger) transactional.Repository {
+	logger := slog.Default()
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
+	return &repository{db: db, logger: logger}
 }
 
 func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) ([]transactional.DataItem, error) {
-	rows, err := r.db.QueryContext(ctx, query.Statement, r.namedArgs(query.Parameters)...)
+	args := r.namedArgs(query.Parameters)
+	start := time.Now()
+	r.logger.InfoContext(ctx, "executing mssql query",
+		slog.Int64("identifier", int64(query.ID)),
+		slog.String("source", string(query.Source)),
+		slog.String("data_category", string(query.DataCategory)),
+		slog.String("query", compactSQL(query.Statement)),
+		slog.Any("parameters", sortedParameters(query.Parameters)),
+	)
+
+	rows, err := r.db.QueryContext(ctx, query.Statement, args...)
 	if err != nil {
+		r.logger.ErrorContext(ctx, "execute mssql query failed",
+			slog.Int64("identifier", int64(query.ID)),
+			slog.String("source", string(query.Source)),
+			slog.String("data_category", string(query.DataCategory)),
+			slog.String("query", compactSQL(query.Statement)),
+			slog.Any("parameters", sortedParameters(query.Parameters)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "execute mssql query", err)
 	}
 	defer rows.Close()
@@ -42,15 +69,52 @@ func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) 
 	}
 
 	if err := rows.Err(); err != nil {
+		r.logger.ErrorContext(ctx, "iterate mssql rows failed",
+			slog.Int64("identifier", int64(query.ID)),
+			slog.String("source", string(query.Source)),
+			slog.String("data_category", string(query.DataCategory)),
+			slog.String("query", compactSQL(query.Statement)),
+			slog.Any("parameters", sortedParameters(query.Parameters)),
+			slog.Int("row_count", len(items)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "iterate mssql rows", err)
 	}
+
+	r.logger.InfoContext(ctx, "mssql query executed",
+		slog.Int64("identifier", int64(query.ID)),
+		slog.String("source", string(query.Source)),
+		slog.String("data_category", string(query.DataCategory)),
+		slog.Int("row_count", len(items)),
+		slog.Duration("duration", time.Since(start)),
+	)
 
 	return items, nil
 }
 
 func (r *repository) Stream(ctx context.Context, query domain.ExecutableQuery) (transactional.Stream, error) {
-	rows, err := r.db.QueryContext(ctx, query.Statement, r.namedArgs(query.Parameters)...)
+	args := r.namedArgs(query.Parameters)
+	start := time.Now()
+	r.logger.InfoContext(ctx, "streaming mssql query",
+		slog.Int64("identifier", int64(query.ID)),
+		slog.String("source", string(query.Source)),
+		slog.String("data_category", string(query.DataCategory)),
+		slog.String("query", compactSQL(query.Statement)),
+		slog.Any("parameters", sortedParameters(query.Parameters)),
+	)
+
+	rows, err := r.db.QueryContext(ctx, query.Statement, args...)
 	if err != nil {
+		r.logger.ErrorContext(ctx, "stream mssql query failed",
+			slog.Int64("identifier", int64(query.ID)),
+			slog.String("source", string(query.Source)),
+			slog.String("data_category", string(query.DataCategory)),
+			slog.String("query", compactSQL(query.Statement)),
+			slog.Any("parameters", sortedParameters(query.Parameters)),
+			slog.Duration("duration", time.Since(start)),
+			slog.Any("error", err),
+		)
 		return nil, apperr.Wrap(apperr.Unavailable, "stream mssql query", err)
 	}
 
@@ -75,6 +139,26 @@ func (r *repository) namedArgs(parameters map[string]any) []any {
 		args = append(args, sql.Named(name, value))
 	}
 	return args
+}
+
+func sortedParameters(parameters map[string]any) []any {
+	if len(parameters) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(parameters))
+	for name := range parameters {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	values := make([]any, 0, len(names))
+	for _, name := range names {
+		values = append(values, map[string]any{
+			"name":  name,
+			"value": parameters[name],
+		})
+	}
+	return values
 }
 
 func (r *repository) scanRow(rows *sql.Rows, cols []string) (map[string]any, error) {

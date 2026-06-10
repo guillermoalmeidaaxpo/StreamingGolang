@@ -97,10 +97,10 @@ func main() {
 	repositories := make(map[domain.SourceKind]transactional.Repository)
 	if cmdpSQLDB != nil {
 		defer cmdpSQLDB.Close()
-		repositories[domain.SourceCMDP] = mssql.NewRepository(cmdpSQLDB)
+		repositories[domain.SourceCMDP] = mssql.NewRepository(cmdpSQLDB, logger)
 	}
 	if mdsDB != nil {
-		repositories[domain.SourceHyperscale] = mssql.NewRepository(mdsDB)
+		repositories[domain.SourceHyperscale] = mssql.NewRepository(mdsDB, logger)
 	}
 	if cassandraSession != nil {
 		repositories[domain.SourceCassandra] = cassandra.NewRepository(cassandraSession)
