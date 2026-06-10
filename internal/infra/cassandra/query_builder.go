@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"streaming-golang/internal/app/apperr"
+	"streaming-golang/internal/app/transactional"
 	"streaming-golang/internal/domain"
 )
 
@@ -247,7 +248,7 @@ func buildDeliveryWindow(nodes []domain.FilterNode, location *time.Location) (lo
 func pointTime(value domain.FilterValue) (time.Time, bool, error) {
 	switch value.Kind {
 	case domain.FilterValuePointInTime:
-		point, err := parsePointTime(value.Raw)
+		point, err := transactional.ParsePointTime(value.Raw)
 		if err != nil {
 			return time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid point-in-time value %q", value.Raw), err)
 		}
@@ -268,11 +269,11 @@ func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error
 		return time.Time{}, time.Time{}, false, nil
 	}
 	if value.Start != "" && value.End != "" {
-		start, err := parsePointTime(value.Start)
+		start, err := transactional.ParsePointTime(value.Start)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid interval start %q", value.Start), err)
 		}
-		end, err := parsePointTime(value.End)
+		end, err := transactional.ParsePointTime(value.End)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid interval end %q", value.End), err)
 		}
@@ -321,18 +322,18 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 		if len(parts) != 2 {
 			return time.Time{}, time.Time{}, false, nil
 		}
-		start, err := parsePointTime(parts[0])
+		start, err := transactional.ParsePointTime(parts[0])
 		if err != nil {
 			return time.Time{}, time.Time{}, false, err
 		}
-		end, err := parsePointTime(parts[1])
+		end, err := transactional.ParsePointTime(parts[1])
 		if err != nil {
 			return time.Time{}, time.Time{}, false, err
 		}
 		return start, end, true, nil
 	}
 
-	start, err := parsePointTime(parts[0])
+	start, err := transactional.ParsePointTime(parts[0])
 	if err != nil {
 		return time.Time{}, time.Time{}, false, err
 	}
@@ -350,22 +351,6 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 	default:
 		return time.Time{}, time.Time{}, false, nil
 	}
-}
-
-func parsePointTime(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-
-	if strings.EqualFold(raw, "now()") {
-		return time.Now().UTC(), nil
-	}
-
-	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		parsed, err := time.Parse(layout, raw)
-		if err == nil {
-			return parsed.UTC(), nil
-		}
-	}
-	return time.ParseInLocation("2006-01-02T15:04:05", raw, time.UTC)
 }
 
 func functionCall(raw string) (name, args string, ok bool) {

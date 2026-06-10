@@ -112,11 +112,11 @@ func intervalQuoteIndexWindow(value domain.FilterValue) (quoteIndexWindow, bool,
 
 func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error) {
 	if value.Start != "" && value.End != "" {
-		start, err := parsePointTime(value.Start)
+		start, err := ParsePointTime(value.Start)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(value.Start, err)
 		}
-		end, err := parsePointTime(value.End)
+		end, err := ParsePointTime(value.End)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(value.End, err)
 		}
@@ -150,11 +150,11 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 		if len(parts) != 2 {
 			return time.Time{}, time.Time{}, false, nil
 		}
-		start, err := parsePointTime(parts[0])
+		start, err := ParsePointTime(parts[0])
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[0], err)
 		}
-		end, err := parsePointTime(parts[1])
+		end, err := ParsePointTime(parts[1])
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[1], err)
 		}
@@ -165,7 +165,7 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 	if len(parts) == 0 {
 		return time.Time{}, time.Time{}, false, nil
 	}
-	start, err := parsePointTime(parts[0])
+	start, err := ParsePointTime(parts[0])
 	if err != nil {
 		return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[0], err)
 	}
@@ -189,7 +189,7 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 func pointTime(value domain.FilterValue) (time.Time, bool, error) {
 	switch value.Kind {
 	case domain.FilterValuePointInTime:
-		point, err := parsePointTime(value.Raw)
+		point, err := ParsePointTime(value.Raw)
 		if err != nil {
 			return time.Time{}, false, invalidReferenceTime(value.Raw, err)
 		}
@@ -264,7 +264,7 @@ func quoteIndex(value time.Time) int {
 	return day.Year()*10000 + int(day.Month())*100 + day.Day()
 }
 
-func parsePointTime(raw string) (time.Time, error) {
+func ParsePointTime(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	base, arithmeticOperator, period := splitPointTimeArithmetic(raw)
 
