@@ -105,23 +105,32 @@ func (r cassandraDateRange) cassandraQuoteIndices(now time.Time) []int {
 	if r.start == nil && r.end == nil {
 		return nil
 	}
-	if r.start == nil {
-		return nil
-	}
 
+	start := r.start
 	end := r.end
-	if end == nil {
-		defaultEnd := quoteIndexDate(now.UTC())
-		if !r.start.Before(defaultEnd) {
-			defaultEnd = *r.start
+
+	// 20-year safety guard for open-ended ranges
+	if start == nil && end != nil {
+		s := end.AddDate(-20, 0, 0)
+		start = &s
+	} else if end == nil && start != nil {
+		e := start.AddDate(20, 0, 0)
+		// Don't go beyond today for future-dated lookups unless explicitly requested
+		today := quoteIndexDate(now.UTC())
+		if e.After(today) {
+			e = today
 		}
-		end = &defaultEnd
+		end = &e
 	}
 
-	if r.start.After(*end) {
+	if start == nil || end == nil {
 		return nil
 	}
-	return quoteIndicesBetween(*r.start, *end)
+
+	if start.After(*end) {
+		return nil
+	}
+	return quoteIndicesBetween(*start, *end)
 }
 
 func cassandraStartDate(value time.Time, location *time.Location, inclusive bool) time.Time {

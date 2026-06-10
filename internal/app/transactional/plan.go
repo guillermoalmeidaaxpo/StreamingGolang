@@ -2,9 +2,8 @@ package transactional
 
 import (
 	"context"
-	"fmt"
+	"time"
 
-	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
 )
 
@@ -99,37 +98,99 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 			if err := validateAgainstMappings(requestContext, request, command, command.Mappings); err != nil {
 				return Plan{}, err
 			}
-			command.Source = sourceFromMappings(command.Mappings)
-			if command.Source == domain.SourceCassandra {
-				command.QuoteIndices, err = CassandraQuoteIndexPlanner{}.PlanQuoteIndices(ctx, command)
-				if err != nil {
-					return Plan{}, err
-				}
-			} else {
-				command.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, command)
-				if err != nil {
-					return Plan{}, err
-				}
+
+			hybridCommands, err := p.splitHybridCommand(ctx, command)
+			if err != nil {
+				return Plan{}, err
 			}
 
-			splitCommands := p.strategy.Plan(command)
-			for _, splitCommand := range splitCommands {
-				built, err := p.queryBuilder.BuildQueries(ctx, splitCommand)
-				if err != nil {
-					return Plan{}, err
+			for _, hCommand := range hybridCommands {
+				if hCommand.Source == domain.SourceCassandra {
+					hCommand.QuoteIndices, err = CassandraQuoteIndexPlanner{}.PlanQuoteIndices(ctx, hCommand)
+					if err != nil {
+						return Plan{}, err
+					}
+				} else {
+					hCommand.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, hCommand)
+					if err != nil {
+						return Plan{}, err
+					}
 				}
-				if len(built) == 0 {
-					return Plan{}, apperr.New(apperr.Unavailable, fmt.Sprintf("no query builder produced a query for source %q", splitCommand.Source))
+
+				splitCommands := p.strategy.Plan(hCommand)
+				for _, splitCommand := range splitCommands {
+					built, err := p.queryBuilder.BuildQueries(ctx, splitCommand)
+					if err != nil {
+						return Plan{}, err
+					}
+					if len(built) == 0 {
+						continue
+					}
+					steps = append(steps, PlanStep{
+						Command: splitCommand,
+						Queries: built,
+					})
 				}
-				steps = append(steps, PlanStep{
-					Command: splitCommand,
-					Queries: built,
-				})
 			}
 		}
 	}
 
 	return Plan{Steps: steps}, nil
+}
+
+func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command) ([]Command, error) {
+	// If no Cassandra mappings or aggregations are present, route entirely to CMDP
+	if !anyCassandra(command.Mappings) || command.HasAggregations {
+		command.Source = domain.SourceCMDP
+		return []Command{command}, nil
+	}
+
+	watermark, err := p.mappings.GetWatermark(ctx, command.Mappings)
+	if err != nil {
+		return nil, err
+	}
+
+	// Analyze ReferenceTime filters to decide how to split
+	location, _ := loadCassandraLocation(cassandraTimeZone(command.Mappings))
+	limits, err := cassandraReferenceTimeRange(command.Filters.Nodes, location, time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	// 1. Entirely Cassandra: UpperLimit < watermark
+	if limits.end != nil && limits.end.Before(watermark) {
+		command.Source = domain.SourceCassandra
+		return []Command{command}, nil
+	}
+
+	// 2. Entirely CMDP: LowerLimit >= watermark
+	if limits.start != nil && (limits.start.After(watermark) || limits.start.Equal(watermark)) {
+		command.Source = domain.SourceCMDP
+		return []Command{command}, nil
+	}
+
+	// 3. Hybrid: Crossing the watermark
+	// Create a Cassandra command for [min, watermark)
+	cassandraCmd := command
+	cassandraCmd.Source = domain.SourceCassandra
+	cassandraCmd.Filters = command.Filters.Clone()
+	cassandraCmd.Filters.Nodes = append(cassandraCmd.Filters.Nodes, domain.ComparisonFilter{
+		Field:    referenceTimeField,
+		Operator: "<",
+		Value:    domain.FilterValue{Kind: domain.FilterValuePointInTime, Raw: watermark.Format(time.RFC3339Nano)},
+	})
+
+	// Create a CMDP command for [watermark, max]
+	cmdpCmd := command
+	cmdpCmd.Source = domain.SourceCMDP
+	cmdpCmd.Filters = command.Filters.Clone()
+	cmdpCmd.Filters.Nodes = append(cmdpCmd.Filters.Nodes, domain.ComparisonFilter{
+		Field:    referenceTimeField,
+		Operator: ">=",
+		Value:    domain.FilterValue{Kind: domain.FilterValuePointInTime, Raw: watermark.Format(time.RFC3339Nano)},
+	})
+
+	return []Command{cassandraCmd, cmdpCmd}, nil
 }
 
 func commandsForRequest(requestContext RequestContext, request Request, mappings []Mapping) []Command {

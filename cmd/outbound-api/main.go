@@ -42,6 +42,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	cmdpSQLDB, err := mssql.OpenSQLServer(cfg.ConnectionStrings.CmdpSQLDatabase)
+	if err != nil {
+		logger.Error("cmdp sql database configuration failed", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	mappingResolver := transactional.MappingResolver(transactional.StaticMappingResolver{})
 	queryBuilder := transactional.QueryBuilder(transactional.PlaceholderQueryBuilder{})
 	var mdsDB *sql.DB
@@ -60,7 +66,7 @@ func main() {
 		if mdsDB != nil {
 			defer mdsDB.Close()
 		}
-		mappingResolver = mssql.NewMappingResolver(cmdpMappingDB, mdsDB, logger)
+		mappingResolver = mssql.NewMappingResolver(cmdpMappingDB, mdsDB, cmdpSQLDB, logger)
 		queryBuilder = transactional.NewCompositeQueryBuilder(
 			mssql.NewCMDPQueryBuilder(),
 			mssql.NewHyperscaleQueryBuilder(),
@@ -89,11 +95,6 @@ func main() {
 		)
 	}
 
-	cmdpSQLDB, err := mssql.OpenSQLServer(cfg.ConnectionStrings.CmdpSQLDatabase)
-	if err != nil {
-		logger.Error("cmdp sql database configuration failed", slog.Any("error", err))
-		os.Exit(1)
-	}
 	repositories := make(map[domain.SourceKind]transactional.Repository)
 	if cmdpSQLDB != nil {
 		defer cmdpSQLDB.Close()

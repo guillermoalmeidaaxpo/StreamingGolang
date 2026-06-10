@@ -1,6 +1,8 @@
 package transactional
 
 import (
+	"strings"
+
 	"streaming-golang/internal/domain"
 )
 
@@ -24,7 +26,7 @@ func (s SplitQueryStrategy) Plan(command Command) []Command {
 		return []Command{command}
 	}
 
-	batches := s.batchQuoteIndices(command.DataCategory, command.QuoteIndices)
+	batches := s.batchQuoteIndices(command)
 	commands := make([]Command, 0, len(batches))
 	for _, batch := range batches {
 		if len(batch) == 0 {
@@ -46,14 +48,17 @@ func (s SplitQueryStrategy) Plan(command Command) []Command {
 	return commands
 }
 
-func (s SplitQueryStrategy) batchQuoteIndices(category domain.DataCategory, quoteIndices []int) [][]int {
+func (s SplitQueryStrategy) batchQuoteIndices(command Command) [][]int {
+	quoteIndices := command.QuoteIndices
 	queryCount := s.QueriesCount
 	if queryCount <= 0 {
 		queryCount = 1
 	}
 
 	batchSize := s.ReferenceTimeSplitDays
-	if category == domain.TimeSeries {
+	if command.Source == domain.SourceCassandra && hasRDPFilter(command.Filters.Nodes) {
+		batchSize = 1
+	} else if command.DataCategory == domain.TimeSeries {
 		batchSize = len(quoteIndices) / queryCount
 	}
 	if batchSize <= 0 {
@@ -69,4 +74,13 @@ func (s SplitQueryStrategy) batchQuoteIndices(category domain.DataCategory, quot
 		batches = append(batches, quoteIndices[start:end])
 	}
 	return batches
+}
+
+func hasRDPFilter(nodes []domain.FilterNode) bool {
+	for _, node := range nodes {
+		if f, ok := node.(domain.ComparisonFilter); ok && strings.EqualFold(f.Field, "RelativeDeliveryPeriod") {
+			return true
+		}
+	}
+	return false
 }

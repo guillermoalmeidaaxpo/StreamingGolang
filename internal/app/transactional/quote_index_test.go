@@ -96,27 +96,3 @@ func TestFilterQuoteIndexPlannerSkipsOpenEndedReferenceTimeWindow(t *testing.T) 
 		t.Fatalf("indices = %#v, want nil", indices)
 	}
 }
-
-func referenceTimeInterval(start, end string) domain.ComparisonFilter {
-	return domain.ComparisonFilter{
-		Field:    "ReferenceTime",
-		Operator: "in",
-		Value: domain.FilterValue{
-			Kind:  domain.FilterValueTimeInterval,
-			Raw:   "ti(" + start + "," + end + ")",
-			Start: start,
-			End:   end,
-		},
-	}
-}
-
-func referenceTimePoint(operator, raw string) domain.ComparisonFilter {
-	return domain.ComparisonFilter{
-		Field:    "ReferenceTime",
-		Operator: operator,
-		Value: domain.FilterValue{
-			Kind: domain.FilterValuePointInTime,
-			Raw:  raw,
-		},
-	}
-}

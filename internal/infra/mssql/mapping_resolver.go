@@ -16,18 +16,60 @@ import (
 type MappingResolver struct {
 	cmdpMappingDB *sql.DB
 	mdsDB         *sql.DB
+	cmdpSQLDB     *sql.DB
 	logger        *slog.Logger
 }
 
-func NewMappingResolver(cmdpMappingDB, mdsDB *sql.DB, logger *slog.Logger) *MappingResolver {
+func NewMappingResolver(cmdpMappingDB, mdsDB, cmdpSQLDB *sql.DB, logger *slog.Logger) *MappingResolver {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &MappingResolver{
 		cmdpMappingDB: cmdpMappingDB,
 		mdsDB:         mdsDB,
+		cmdpSQLDB:     cmdpSQLDB,
 		logger:        logger,
 	}
+}
+
+func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Mapping) (time.Time, error) {
+	if r.cmdpSQLDB == nil {
+		return time.Now().UTC(), nil
+	}
+
+	// For simplicity, we assume the watermark is the max ReferenceTime in the CMDP views
+	// for the requested mappings. C# uses accessDataRepository.GetMinMaxReferenceTimeDeliveryStart.
+	
+	// We'll take the first mapping as a representative for the view to query
+	if len(mappings) == 0 || mappings[0].ViewName == "" {
+		return time.Now().UTC(), nil
+	}
+
+	view := mappings[0].ViewName
+	query := fmt.Sprintf("SELECT MAX(ReferenceTime) FROM %s", view)
+	
+	start := time.Now()
+	var watermark sql.NullTime
+	err := r.cmdpSQLDB.QueryRowContext(ctx, query).Scan(&watermark)
+	if err != nil {
+		r.logger.WarnContext(ctx, "failed to get watermark from CMDP",
+			slog.String("view", view),
+			slog.Any("error", err),
+		)
+		return time.Now().UTC(), nil // Fallback to now
+	}
+
+	res := watermark.Time
+	if !watermark.Valid {
+		res = time.Now().UTC()
+	}
+
+	r.logger.InfoContext(ctx, "watermark retrieved",
+		slog.String("view", view),
+		slog.Time("watermark", res),
+		slog.Duration("duration", time.Since(start)),
+	)
+	return res.UTC(), nil
 }
 
 func (r *MappingResolver) ResolveMappings(ctx context.Context, ids []domain.Identifier, category domain.DataCategory, stage string) ([]domain.Mapping, error) {

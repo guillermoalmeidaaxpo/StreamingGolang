@@ -3,6 +3,7 @@ package transactional
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"streaming-golang/internal/domain"
 )
@@ -21,6 +22,10 @@ func (StaticMappingResolver) ResolveMappings(_ context.Context, ids []domain.Ide
 		})
 	}
 	return mappings, nil
+}
+
+func (StaticMappingResolver) GetWatermark(_ context.Context, _ []domain.Mapping) (time.Time, error) {
+	return time.Now().UTC(), nil
 }
 
 type PlaceholderQueryBuilder struct{}

@@ -2,12 +2,14 @@ package transactional
 
 import (
 	"context"
+	"time"
 
 	"streaming-golang/internal/domain"
 )
 
 type MappingResolver interface {
 	ResolveMappings(context.Context, []domain.Identifier, domain.DataCategory, string) ([]domain.Mapping, error)
+	GetWatermark(ctx context.Context, mappings []domain.Mapping) (time.Time, error)
 }
 
 type QuoteIndexPlanner interface {

@@ -5,6 +5,13 @@ type FilterSet struct {
 	Nodes       []FilterNode
 }
 
+func (f FilterSet) Clone() FilterSet {
+	return FilterSet{
+		Expressions: append([]string(nil), f.Expressions...),
+		Nodes:       append([]FilterNode(nil), f.Nodes...),
+	}
+}
+
 type FilterNode interface {
 	filterNode()
 }
