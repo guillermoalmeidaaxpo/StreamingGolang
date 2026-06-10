@@ -161,6 +161,7 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		IncludeDeleted:    includeDeleted(request),
 		IncludeIdentifier: includeIdentifier(requestContext),
 		IncludeOffset:     includeOffset(requestContext, request),
+		FilterTimeZone:    filterTimeZone(request),
 		TargetTimeZone:    targetTimeZone(request),
 		HasAggregations:   hasAggregations(request),
 		HasShape:          request.Filters != nil && len(request.Filters.Shape) > 0,
@@ -173,6 +174,13 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		}
 	}
 	return command
+}
+
+func filterTimeZone(request Request) string {
+	if request.Filters == nil {
+		return ""
+	}
+	return request.Filters.FilterTimeZone
 }
 
 func includeDeleted(request Request) bool {

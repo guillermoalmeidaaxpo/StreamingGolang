@@ -10,6 +10,7 @@ type Command struct {
 	IncludeDeleted    bool
 	IncludeIdentifier bool
 	IncludeOffset     bool
+	FilterTimeZone    string
 	TargetTimeZone    string
 	HasAggregations   bool
 	HasShape          bool

@@ -85,7 +85,7 @@ func main() {
 		defer cassandraSession.Close()
 		queryBuilder = transactional.NewCompositeQueryBuilder(
 			queryBuilder,
-			cassandra.NewCassandraQueryBuilder(cfg.Cassandra.TableMappings),
+			cassandra.NewCassandraQueryBuilder(cfg.Cassandra.TableMappings, cfg.Cassandra.Keyspace),
 		)
 	}
 
@@ -103,7 +103,7 @@ func main() {
 		repositories[domain.SourceHyperscale] = mssql.NewRepository(mdsDB, logger)
 	}
 	if cassandraSession != nil {
-		repositories[domain.SourceCassandra] = cassandra.NewRepository(cassandraSession)
+		repositories[domain.SourceCassandra] = cassandra.NewRepository(cassandraSession, logger)
 	}
 
 	pipeline := transactional.NewPipeline(
