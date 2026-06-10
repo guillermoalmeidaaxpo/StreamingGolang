@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"streaming-golang/internal/app/transactional"
 )
 
 func TestTransactionalEndpointReturnsReferenceDataAsArray(t *testing.T) {
@@ -140,5 +142,15 @@ func TestGenericEndpointRejectsInvalidSchemaTypes(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+}
+
+func TestGenericRequestContextDoesNotForceDataCategory(t *testing.T) {
+	requestContext := genericRequestContext("/api/v1/generic", transactional.ModeCSV, "development")
+	if requestContext.EndpointKind != transactional.EndpointGeneric {
+		t.Fatalf("endpoint kind = %q, want generic", requestContext.EndpointKind)
+	}
+	if requestContext.DataCategory != "" {
+		t.Fatalf("data category = %q, want empty for generic", requestContext.DataCategory)
 	}
 }

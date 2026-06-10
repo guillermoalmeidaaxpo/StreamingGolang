@@ -56,6 +56,13 @@ func endpointKind(requestContext RequestContext) EndpointKind {
 }
 
 func validateMappingCategory(requestContext RequestContext, mappings []domain.Mapping) error {
+	if endpointKind(requestContext) == EndpointGeneric && requestContext.DataCategory == "" {
+		return nil
+	}
+	if requestContext.DataCategory == "" {
+		return nil
+	}
+
 	invalid := make([]string, 0)
 	for _, mapping := range mappings {
 		if mapping.DataCategory != "" && mapping.DataCategory != requestContext.DataCategory {

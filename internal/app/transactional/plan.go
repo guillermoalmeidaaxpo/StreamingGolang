@@ -94,48 +94,82 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 			return Plan{}, err
 		}
 
-		command := Command{
-			IDs:             request.IDs,
-			DataCategory:    requestContext.DataCategory,
-			Columns:         append([]string(nil), request.Columns...),
-			IncludeOffset:   includeOffset(requestContext, request),
-			TargetTimeZone:  targetTimeZone(request),
-			HasAggregations: hasAggregations(request),
-			HasShape:        request.Filters != nil && len(request.Filters.Shape) > 0,
-			Mappings:        mappings,
-		}
-		if request.Filters != nil {
-			command.Filters = request.Filters.Parsed
-			if len(command.Filters.Expressions) == 0 {
-				command.Filters.Expressions = request.Filters.Expressions
+		commands := commandsForRequest(requestContext, request, mappings)
+		for _, command := range commands {
+			if err := validateAgainstMappings(requestContext, request, command, command.Mappings); err != nil {
+				return Plan{}, err
 			}
-		}
-		if err := validateAgainstMappings(requestContext, request, command, mappings); err != nil {
-			return Plan{}, err
-		}
-		command.Source = sourceFromMappings(mappings)
-		command.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, command)
-		if err != nil {
-			return Plan{}, err
-		}
-
-		splitCommands := p.strategy.Plan(command)
-		for _, splitCommand := range splitCommands {
-			built, err := p.queryBuilder.BuildQueries(ctx, splitCommand)
+			command.Source = sourceFromMappings(command.Mappings)
+			command.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, command)
 			if err != nil {
 				return Plan{}, err
 			}
-			if len(built) == 0 {
-				return Plan{}, apperr.New(apperr.Unavailable, fmt.Sprintf("no query builder produced a query for source %q", splitCommand.Source))
+
+			splitCommands := p.strategy.Plan(command)
+			for _, splitCommand := range splitCommands {
+				built, err := p.queryBuilder.BuildQueries(ctx, splitCommand)
+				if err != nil {
+					return Plan{}, err
+				}
+				if len(built) == 0 {
+					return Plan{}, apperr.New(apperr.Unavailable, fmt.Sprintf("no query builder produced a query for source %q", splitCommand.Source))
+				}
+				steps = append(steps, PlanStep{
+					Command: splitCommand,
+					Queries: built,
+				})
 			}
-			steps = append(steps, PlanStep{
-				Command: splitCommand,
-				Queries: built,
-			})
 		}
 	}
 
 	return Plan{Steps: steps}, nil
+}
+
+func commandsForRequest(requestContext RequestContext, request Request, mappings []Mapping) []Command {
+	if endpointKind(requestContext) != EndpointGeneric || requestContext.DataCategory != "" || len(mappings) == 0 {
+		return []Command{newCommand(requestContext, request, requestContext.DataCategory, request.IDs, mappings)}
+	}
+
+	grouped := make(map[domain.DataCategory][]Mapping)
+	order := make([]domain.DataCategory, 0)
+	for _, mapping := range mappings {
+		category := mapping.DataCategory
+		if _, exists := grouped[category]; !exists {
+			order = append(order, category)
+		}
+		grouped[category] = append(grouped[category], mapping)
+	}
+
+	commands := make([]Command, 0, len(order))
+	for _, category := range order {
+		group := grouped[category]
+		ids := make([]domain.Identifier, 0, len(group))
+		for _, mapping := range group {
+			ids = append(ids, mapping.ID)
+		}
+		commands = append(commands, newCommand(requestContext, request, category, ids, group))
+	}
+	return commands
+}
+
+func newCommand(requestContext RequestContext, request Request, category domain.DataCategory, ids []domain.Identifier, mappings []Mapping) Command {
+	command := Command{
+		IDs:             append([]domain.Identifier(nil), ids...),
+		DataCategory:    category,
+		Columns:         append([]string(nil), request.Columns...),
+		IncludeOffset:   includeOffset(requestContext, request),
+		TargetTimeZone:  targetTimeZone(request),
+		HasAggregations: hasAggregations(request),
+		HasShape:        request.Filters != nil && len(request.Filters.Shape) > 0,
+		Mappings:        append([]Mapping(nil), mappings...),
+	}
+	if request.Filters != nil {
+		command.Filters = request.Filters.Parsed
+		if len(command.Filters.Expressions) == 0 {
+			command.Filters.Expressions = request.Filters.Expressions
+		}
+	}
+	return command
 }
 
 func includeOffset(requestContext RequestContext, request Request) bool {

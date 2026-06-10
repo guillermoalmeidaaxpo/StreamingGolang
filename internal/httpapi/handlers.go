@@ -174,7 +174,7 @@ func transactionalRequestContext(path string, mode transactional.ResponseMode, f
 
 func genericRequestContext(path string, mode transactional.ResponseMode, fallbackStage string) transactional.RequestContext {
 	requestContext := transactionalRequestContext(path, mode, fallbackStage)
-	requestContext.DataCategory = domain.Curves
+	requestContext.DataCategory = ""
 	requestContext.EndpointKind = transactional.EndpointGeneric
 	return requestContext
 }

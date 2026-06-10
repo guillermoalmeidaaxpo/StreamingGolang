@@ -40,7 +40,7 @@ func (b *CassandraQueryBuilder) BuildQueries(_ context.Context, command domain.C
 
 		queries = append(queries, domain.ExecutableQuery{
 			ID:           mapping.ID,
-			DataCategory: command.DataCategory,
+			DataCategory: dataCategoryForQuery(command.DataCategory, mapping),
 			Source:       domain.SourceCassandra,
 			Statement:    statement,
 			Arguments:    arguments,
@@ -48,6 +48,13 @@ func (b *CassandraQueryBuilder) BuildQueries(_ context.Context, command domain.C
 	}
 
 	return queries, nil
+}
+
+func dataCategoryForQuery(commandCategory domain.DataCategory, mapping domain.Mapping) domain.DataCategory {
+	if mapping.DataCategory != "" {
+		return mapping.DataCategory
+	}
+	return commandCategory
 }
 
 func (b *CassandraQueryBuilder) resolveTable(mapping domain.Mapping) (string, bool) {

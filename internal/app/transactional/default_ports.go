@@ -26,11 +26,17 @@ func (StaticMappingResolver) ResolveMappings(_ context.Context, ids []domain.Ide
 type PlaceholderQueryBuilder struct{}
 
 func (PlaceholderQueryBuilder) BuildQueries(_ context.Context, command Command) ([]domain.ExecutableQuery, error) {
+	mappingByID := make(map[domain.Identifier]domain.Mapping, len(command.Mappings))
+	for _, mapping := range command.Mappings {
+		mappingByID[mapping.ID] = mapping
+	}
+
 	queries := make([]domain.ExecutableQuery, 0, len(command.IDs))
 	for _, id := range command.IDs {
+		mapping := mappingByID[id]
 		queries = append(queries, domain.ExecutableQuery{
 			ID:           id,
-			DataCategory: command.DataCategory,
+			DataCategory: dataCategoryForQuery(command.DataCategory, mapping),
 			Source:       command.Source,
 			Filters:      command.Filters,
 			IndexRange:   command.IndexRange,
@@ -41,4 +47,11 @@ func (PlaceholderQueryBuilder) BuildQueries(_ context.Context, command Command) 
 		})
 	}
 	return queries, nil
+}
+
+func dataCategoryForQuery(commandCategory domain.DataCategory, mapping domain.Mapping) domain.DataCategory {
+	if mapping.DataCategory != "" {
+		return mapping.DataCategory
+	}
+	return commandCategory
 }

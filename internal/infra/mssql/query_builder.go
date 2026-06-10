@@ -38,7 +38,7 @@ func (CMDPQueryBuilder) BuildQueries(_ context.Context, command domain.Command) 
 		}
 		queries = append(queries, domain.ExecutableQuery{
 			ID:           mapping.ID,
-			DataCategory: command.DataCategory,
+			DataCategory: dataCategoryForQuery(command.DataCategory, mapping),
 			Source:       domain.SourceCMDP,
 			Filters:      command.Filters,
 			IndexRange:   command.IndexRange,
@@ -51,6 +51,13 @@ func (CMDPQueryBuilder) BuildQueries(_ context.Context, command domain.Command) 
 		return nil, nil
 	}
 	return queries, nil
+}
+
+func dataCategoryForQuery(commandCategory domain.DataCategory, mapping domain.Mapping) domain.DataCategory {
+	if mapping.DataCategory != "" {
+		return mapping.DataCategory
+	}
+	return commandCategory
 }
 
 func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexRange *domain.IndexRange, requestedColumns []string) (string, map[string]any, error) {

@@ -47,3 +47,40 @@ func TestPlannerBuildsExecutableQueriesThroughFullFlow(t *testing.T) {
 		t.Fatalf("unexpected first index range: %#v", query.IndexRange)
 	}
 }
+
+func TestGenericPlannerUsesMappingCategories(t *testing.T) {
+	planner := NewPlanner(
+		WithMappingResolver(fixedMappingResolver{mappings: []domain.Mapping{
+			mappingWithColumns(10, domain.Curves),
+			mappingWithColumns(20, domain.TimeSeries),
+		}}),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		EndpointKind: EndpointGeneric,
+		Stage:        "development",
+		Mode:         ModeCSV,
+	}, []Request{{
+		IDs: []domain.Identifier{10, 20},
+	}})
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+
+	if len(plan.Steps) != 2 {
+		t.Fatalf("steps = %d, want one per mapping category", len(plan.Steps))
+	}
+	if got := plan.Steps[0].Command.DataCategory; got != domain.Curves {
+		t.Fatalf("first command category = %q, want curves", got)
+	}
+	if got := plan.Steps[1].Command.DataCategory; got != domain.TimeSeries {
+		t.Fatalf("second command category = %q, want timeseries", got)
+	}
+	if got := plan.Steps[0].Queries[0].DataCategory; got != domain.Curves {
+		t.Fatalf("first query category = %q, want curves", got)
+	}
+	if got := plan.Steps[1].Queries[0].DataCategory; got != domain.TimeSeries {
+		t.Fatalf("second query category = %q, want timeseries", got)
+	}
+}
