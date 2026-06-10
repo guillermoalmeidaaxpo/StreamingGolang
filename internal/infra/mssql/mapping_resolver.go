@@ -303,13 +303,21 @@ func buildDomainMappings(rows []mappingRow, fallbackCategory domain.DataCategory
 			DataCategory: category,
 			Source:       sourceKind(first),
 			ViewName:     first.CMDPViewName.String,
-			IndexField:   first.IndexField.String,
-			Resolution:   first.Resolution.String,
-			CassandraID:  first.CassandraID.String,
-			SwitchOver:   first.SwitchOver.String,
-			SplitQuery:   boolValue(first.SplitQuery, true),
-			Timezone:     first.Timezone.String,
-			Columns:      make([]domain.ColumnMapping, 0, len(group)),
+			Views: domain.MappingViews{
+				LatestVersion:                     first.LatestVersionView.String,
+				LatestReferenceTime:               first.LatestReferenceTimeView.String,
+				LatestVersionWithCreatedOn:        first.LatestVersionWithCreatedOnView.String,
+				LatestReferenceTimeWithCreatedOn:  first.LatestReferenceTimeWithCreatedOnView.String,
+				GetByCreatedOn:                    first.GetByCreatedOnView.String,
+				GetByCreatedOnLatestReferenceTime: first.GetByCreatedOnLatestReferenceTimeView.String,
+			},
+			IndexField:  first.IndexField.String,
+			Resolution:  first.Resolution.String,
+			CassandraID: first.CassandraID.String,
+			SwitchOver:  first.SwitchOver.String,
+			SplitQuery:  boolValue(first.SplitQuery, true),
+			Timezone:    first.Timezone.String,
+			Columns:     make([]domain.ColumnMapping, 0, len(group)),
 		}
 		if first.HyperscaleID.Valid {
 			hyperscaleID := domain.Identifier(first.HyperscaleID.Int64)

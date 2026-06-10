@@ -154,14 +154,17 @@ func commandsForRequest(requestContext RequestContext, request Request, mappings
 
 func newCommand(requestContext RequestContext, request Request, category domain.DataCategory, ids []domain.Identifier, mappings []Mapping) Command {
 	command := Command{
-		IDs:             append([]domain.Identifier(nil), ids...),
-		DataCategory:    category,
-		Columns:         append([]string(nil), request.Columns...),
-		IncludeOffset:   includeOffset(requestContext, request),
-		TargetTimeZone:  targetTimeZone(request),
-		HasAggregations: hasAggregations(request),
-		HasShape:        request.Filters != nil && len(request.Filters.Shape) > 0,
-		Mappings:        append([]Mapping(nil), mappings...),
+		IDs:               append([]domain.Identifier(nil), ids...),
+		DataCategory:      category,
+		Columns:           append([]string(nil), request.Columns...),
+		VersionAsOf:       request.VersionAsOf,
+		IncludeDeleted:    includeDeleted(request),
+		IncludeIdentifier: includeIdentifier(requestContext),
+		IncludeOffset:     includeOffset(requestContext, request),
+		TargetTimeZone:    targetTimeZone(request),
+		HasAggregations:   hasAggregations(request),
+		HasShape:          request.Filters != nil && len(request.Filters.Shape) > 0,
+		Mappings:          append([]Mapping(nil), mappings...),
 	}
 	if request.Filters != nil {
 		command.Filters = request.Filters.Parsed
@@ -170,6 +173,14 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		}
 	}
 	return command
+}
+
+func includeDeleted(request Request) bool {
+	return request.IncludeDeleted != nil && *request.IncludeDeleted
+}
+
+func includeIdentifier(requestContext RequestContext) bool {
+	return requestContext.Mode == ModeCSV || requestContext.Mode == ModeCSVStream
 }
 
 func includeOffset(requestContext RequestContext, request Request) bool {

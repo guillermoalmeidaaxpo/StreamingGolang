@@ -131,7 +131,7 @@ func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 			DataCategory: domain.Curves,
 			Source:       domain.SourceHyperscale,
 			Columns: []domain.ColumnMapping{
-				{MDSName: "MdoId", SourceName: "MdoId", IsKey: true, IsProjectable: false, KeyColumnOrdering: &keyOrder},
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true, IsProjectable: false, KeyColumnOrdering: &keyOrder},
 				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true, IsProjectable: false},
 				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true, ValueColumnOrdering: &valueOrder},
 			},
@@ -145,11 +145,12 @@ func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	}
 
 	statement := queries[0].Statement
-	assertContains(t, statement, "FROM [Api].[VI_Curve] AS [d]")
+	assertContains(t, statement, "FROM [Api].[VI_CurveLatestVersion] AS [d]")
 	assertContains(t, statement, "[d].[MdoId] = @id")
 	assertContains(t, statement, "[d].[ReferenceTime] >= @p0")
 	assertContains(t, statement, "CAST(JSON_VALUE([d].[CurveValue], '$.\"Value\"') AS FLOAT) AS [Value]")
 	assertContains(t, statement, "[d].[Deleted] = 0")
+	assertNotContains(t, statement, "[d].[Identifier]")
 
 	if queries[0].Source != domain.SourceHyperscale {
 		t.Fatalf("source = %q, want hyperscale", queries[0].Source)
@@ -159,9 +160,46 @@ func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	}
 }
 
+func TestHyperscaleQueryBuilderIncludesIdentifierForCSV(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	keyOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:      domain.Surfaces,
+		IncludeIdentifier: true,
+		Mappings: []domain.Mapping{{
+			ID:           1000000001,
+			DataCategory: domain.Surfaces,
+			Source:       domain.SourceHyperscale,
+			Columns: []domain.ColumnMapping{
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "SELECT [d].[MdoId] AS [Identifier], [d].[ReferenceTime]")
+	assertContains(t, statement, "FROM [Api].[VI_SurfaceLatestVersion] AS [d]")
+	assertContains(t, statement, "ORDER BY [d].[MdoId]")
+}
+
 func assertContains(t *testing.T, text, substring string) {
 	t.Helper()
 	if !strings.Contains(text, substring) {
 		t.Fatalf("expected statement to contain %q:\n%s", substring, text)
+	}
+}
+
+func assertNotContains(t *testing.T, text, substring string) {
+	t.Helper()
+	if strings.Contains(text, substring) {
+		t.Fatalf("expected statement not to contain %q:\n%s", substring, text)
 	}
 }

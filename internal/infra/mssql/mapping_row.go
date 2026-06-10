@@ -9,25 +9,31 @@ type rowScanner interface {
 }
 
 type mappingRow struct {
-	TimeSeriesID        int64
-	CMDPViewName        sql.NullString
-	MDSDataCategory     string
-	MDSDataStructure    sql.NullString
-	Resolution          sql.NullString
-	CMDPColumnName      string
-	MDSColumnName       string
-	DataType            string
-	IsProjectable       sql.NullBool
-	IsKey               sql.NullBool
-	OrderPriority       sql.NullInt64
-	KeyColumnOrdering   sql.NullInt64
-	ValueColumnOrdering sql.NullInt64
-	CassandraID         sql.NullString
-	HyperscaleID        sql.NullInt64
-	SplitQuery          sql.NullBool
-	IndexField          sql.NullString
-	SwitchOver          sql.NullString
-	Timezone            sql.NullString
+	TimeSeriesID                          int64
+	CMDPViewName                          sql.NullString
+	MDSDataCategory                       string
+	MDSDataStructure                      sql.NullString
+	Resolution                            sql.NullString
+	CMDPColumnName                        string
+	MDSColumnName                         string
+	DataType                              string
+	IsProjectable                         sql.NullBool
+	IsKey                                 sql.NullBool
+	OrderPriority                         sql.NullInt64
+	KeyColumnOrdering                     sql.NullInt64
+	ValueColumnOrdering                   sql.NullInt64
+	CassandraID                           sql.NullString
+	HyperscaleID                          sql.NullInt64
+	SplitQuery                            sql.NullBool
+	IndexField                            sql.NullString
+	SwitchOver                            sql.NullString
+	Timezone                              sql.NullString
+	LatestVersionView                     sql.NullString
+	LatestReferenceTimeView               sql.NullString
+	LatestVersionWithCreatedOnView        sql.NullString
+	LatestReferenceTimeWithCreatedOnView  sql.NullString
+	GetByCreatedOnView                    sql.NullString
+	GetByCreatedOnLatestReferenceTimeView sql.NullString
 }
 
 func scanMappingRow(scanner rowScanner) (mappingRow, error) {

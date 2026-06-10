@@ -1,18 +1,23 @@
 package domain
 
+import "time"
+
 type Command struct {
-	IDs             []Identifier
-	DataCategory    DataCategory
-	Columns         []string
-	IncludeOffset   bool
-	TargetTimeZone  string
-	HasAggregations bool
-	HasShape        bool
-	Filters         FilterSet
-	Mappings        []Mapping
-	Source          SourceKind
-	QuoteIndices    []int
-	IndexRange      *IndexRange
+	IDs               []Identifier
+	DataCategory      DataCategory
+	Columns           []string
+	VersionAsOf       *time.Time
+	IncludeDeleted    bool
+	IncludeIdentifier bool
+	IncludeOffset     bool
+	TargetTimeZone    string
+	HasAggregations   bool
+	HasShape          bool
+	Filters           FilterSet
+	Mappings          []Mapping
+	Source            SourceKind
+	QuoteIndices      []int
+	IndexRange        *IndexRange
 }
 
 type IndexRange struct {
@@ -25,6 +30,7 @@ type Mapping struct {
 	DataCategory DataCategory
 	Source       SourceKind
 	ViewName     string
+	Views        MappingViews
 	IndexField   string
 	Resolution   string
 	CassandraID  string
@@ -33,6 +39,15 @@ type Mapping struct {
 	SplitQuery   bool
 	Timezone     string
 	Columns      []ColumnMapping
+}
+
+type MappingViews struct {
+	LatestVersion                     string
+	LatestReferenceTime               string
+	LatestVersionWithCreatedOn        string
+	LatestReferenceTimeWithCreatedOn  string
+	GetByCreatedOn                    string
+	GetByCreatedOnLatestReferenceTime string
 }
 
 type ColumnMapping struct {

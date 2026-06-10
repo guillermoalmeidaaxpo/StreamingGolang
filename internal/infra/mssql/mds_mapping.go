@@ -26,6 +26,12 @@ SELECT
 	OrderPriority,
 	KeyColumnOrdering,
 	ValueColumnOrdering,
+	LatestVersionView,
+	LatestReferenceTimeView,
+	LatestVersionView + 'WithCreatedOn' AS LatestVersionWithCreatedOnView,
+	LatestReferenceTimeView + 'WithCreatedOn' AS LatestReferenceTimeWithCreatedOnView,
+	GetByCreatedOnView,
+	GetByCreatedOnLatestReferenceTimeView,
 	TimeZone
 FROM [Api].[VI_MdsMappingDetails]
 WHERE MdoId IN (%s)`, strings.Join(placeholders, ",")), args
@@ -53,6 +59,12 @@ func scanMDSMappingRow(scanner rowScanner) (mappingRow, error) {
 		&orderPriority,
 		&keyColumnOrdering,
 		&valueColumnOrdering,
+		&row.LatestVersionView,
+		&row.LatestReferenceTimeView,
+		&row.LatestVersionWithCreatedOnView,
+		&row.LatestReferenceTimeWithCreatedOnView,
+		&row.GetByCreatedOnView,
+		&row.GetByCreatedOnLatestReferenceTimeView,
 		&timezone,
 	)
 	if err != nil {
