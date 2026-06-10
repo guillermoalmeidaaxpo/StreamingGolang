@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -207,9 +208,16 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 			// For streaming, we apply per-item if possible, but aggregations might need buffering
 			// For now, assume per-item (like TimeZone)
 			go func() {
+				location := time.UTC
+				if step.Command.TargetTimeZone != "" {
+					if loc, err := time.LoadLocation(step.Command.TargetTimeZone); err == nil {
+						location = loc
+					}
+				}
+
 				defer close(transformDone)
 				for item := range stepResults {
-					transformed := e.transformer.processItem(item, step.Command, nil) // Location will be re-loaded inside if needed, or we can optimize
+					transformed := e.transformer.processItem(item, step.Command, location)
 					select {
 					case s.results <- transformed:
 					case <-mCtx.Done():

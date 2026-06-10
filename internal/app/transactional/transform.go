@@ -32,6 +32,13 @@ func (p *TransformationProcessor) Process(ctx context.Context, items []DataItem,
 func (p *TransformationProcessor) processItem(item DataItem, command Command, location *time.Location) DataItem {
 	// 1. Timezone conversion
 	if command.TargetTimeZone != "" {
+		if location == nil {
+			if loc, err := time.LoadLocation(command.TargetTimeZone); err == nil {
+				location = loc
+			} else {
+				location = time.UTC
+			}
+		}
 		for key, value := range item.Fields {
 			if t, ok := value.(time.Time); ok {
 				item.Fields[key] = t.In(location)
