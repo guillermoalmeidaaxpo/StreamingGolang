@@ -248,7 +248,7 @@ func buildDeliveryWindow(nodes []domain.FilterNode, location *time.Location) (lo
 func pointTime(value domain.FilterValue) (time.Time, bool, error) {
 	switch value.Kind {
 	case domain.FilterValuePointInTime:
-		point, err := transactional.ParsePointTime(value.Raw)
+		point, err := transactional.ParsePointTime(value.Raw, nil)
 		if err != nil {
 			return time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid point-in-time value %q", value.Raw), err)
 		}
@@ -269,11 +269,11 @@ func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error
 		return time.Time{}, time.Time{}, false, nil
 	}
 	if value.Start != "" && value.End != "" {
-		start, err := transactional.ParsePointTime(value.Start)
+		start, err := transactional.ParsePointTime(value.Start, nil)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid interval start %q", value.Start), err)
 		}
-		end, err := transactional.ParsePointTime(value.End)
+		end, err := transactional.ParsePointTime(value.End, nil)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, apperr.Wrap(apperr.Invalid, fmt.Sprintf("invalid interval end %q", value.End), err)
 		}
@@ -322,18 +322,18 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 		if len(parts) != 2 {
 			return time.Time{}, time.Time{}, false, nil
 		}
-		start, err := transactional.ParsePointTime(parts[0])
+		start, err := transactional.ParsePointTime(parts[0], nil)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, err
 		}
-		end, err := transactional.ParsePointTime(parts[1])
+		end, err := transactional.ParsePointTime(parts[1], nil)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, err
 		}
 		return start, end, true, nil
 	}
 
-	start, err := transactional.ParsePointTime(parts[0])
+	start, err := transactional.ParsePointTime(parts[0], nil)
 	if err != nil {
 		return time.Time{}, time.Time{}, false, err
 	}

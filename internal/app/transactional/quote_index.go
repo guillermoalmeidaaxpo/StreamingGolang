@@ -23,7 +23,8 @@ func (FilterQuoteIndexPlanner) PlanQuoteIndices(_ context.Context, command Comma
 		return nil, nil
 	}
 
-	window, found, err := referenceTimeWindow(command.Filters.Nodes)
+	loc, _ := loadLocation(command.FilterTimeZone)
+	window, found, err := referenceTimeWindow(command.Filters.Nodes, loc)
 	if err != nil || !found {
 		return nil, err
 	}
@@ -42,7 +43,7 @@ type quoteIndexWindow struct {
 	end   *time.Time
 }
 
-func referenceTimeWindow(nodes []domain.FilterNode) (quoteIndexWindow, bool, error) {
+func referenceTimeWindow(nodes []domain.FilterNode, loc *time.Location) (quoteIndexWindow, bool, error) {
 	var window quoteIndexWindow
 	found := false
 
@@ -53,7 +54,7 @@ func referenceTimeWindow(nodes []domain.FilterNode) (quoteIndexWindow, bool, err
 		}
 		found = true
 
-		filterWindow, finite, err := referenceTimeComparisonWindow(comparison)
+		filterWindow, finite, err := referenceTimeComparisonWindow(comparison, loc)
 		if err != nil {
 			return quoteIndexWindow{}, false, err
 		}
@@ -66,25 +67,25 @@ func referenceTimeWindow(nodes []domain.FilterNode) (quoteIndexWindow, bool, err
 	return window, found, nil
 }
 
-func referenceTimeComparisonWindow(filter domain.ComparisonFilter) (quoteIndexWindow, bool, error) {
+func referenceTimeComparisonWindow(filter domain.ComparisonFilter, loc *time.Location) (quoteIndexWindow, bool, error) {
 	switch {
 	case strings.EqualFold(filter.Operator, "in"):
-		return intervalQuoteIndexWindow(filter.Value)
+		return intervalQuoteIndexWindow(filter.Value, loc)
 	case filter.Operator == "=":
-		point, ok, err := pointTime(filter.Value)
+		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
 		return paddedPointWindow(point), true, nil
 	case filter.Operator == ">" || filter.Operator == ">=":
-		point, ok, err := pointTime(filter.Value)
+		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
 		start := quoteIndexDate(point).AddDate(0, 0, -1)
 		return quoteIndexWindow{start: &start}, true, nil
 	case filter.Operator == "<" || filter.Operator == "<=":
-		point, ok, err := pointTime(filter.Value)
+		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return quoteIndexWindow{}, ok, err
 		}
@@ -95,12 +96,12 @@ func referenceTimeComparisonWindow(filter domain.ComparisonFilter) (quoteIndexWi
 	}
 }
 
-func intervalQuoteIndexWindow(value domain.FilterValue) (quoteIndexWindow, bool, error) {
+func intervalQuoteIndexWindow(value domain.FilterValue, loc *time.Location) (quoteIndexWindow, bool, error) {
 	if value.Kind != domain.FilterValueTimeInterval {
 		return quoteIndexWindow{}, false, nil
 	}
 
-	start, end, ok, err := intervalBounds(value)
+	start, end, ok, err := intervalBounds(value, loc)
 	if err != nil || !ok {
 		return quoteIndexWindow{}, ok, err
 	}
@@ -110,13 +111,13 @@ func intervalQuoteIndexWindow(value domain.FilterValue) (quoteIndexWindow, bool,
 	return quoteIndexWindow{start: &windowStart, end: &windowEnd}, true, nil
 }
 
-func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error) {
+func intervalBounds(value domain.FilterValue, loc *time.Location) (time.Time, time.Time, bool, error) {
 	if value.Start != "" && value.End != "" {
-		start, err := ParsePointTime(value.Start)
+		start, err := ParsePointTime(value.Start, loc)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(value.Start, err)
 		}
-		end, err := ParsePointTime(value.End)
+		end, err := ParsePointTime(value.End, loc)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(value.End, err)
 		}
@@ -127,7 +128,7 @@ func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error
 		return start, end, true, nil
 	}
 
-	start, end, ok, err := intervalFunctionBounds(stripTrailingTimeArithmetic(value.Raw, value.Arithmetic))
+	start, end, ok, err := intervalFunctionBounds(stripTrailingTimeArithmetic(value.Raw, value.Arithmetic), loc)
 	if err != nil || !ok {
 		return start, end, ok, err
 	}
@@ -138,7 +139,7 @@ func intervalBounds(value domain.FilterValue) (time.Time, time.Time, bool, error
 	return start, end, true, nil
 }
 
-func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
+func intervalFunctionBounds(raw string, loc *time.Location) (time.Time, time.Time, bool, error) {
 	name, args, ok := functionCall(raw)
 	if !ok {
 		return time.Time{}, time.Time{}, false, nil
@@ -150,11 +151,11 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 		if len(parts) != 2 {
 			return time.Time{}, time.Time{}, false, nil
 		}
-		start, err := ParsePointTime(parts[0])
+		start, err := ParsePointTime(parts[0], loc)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[0], err)
 		}
-		end, err := ParsePointTime(parts[1])
+		end, err := ParsePointTime(parts[1], loc)
 		if err != nil {
 			return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[1], err)
 		}
@@ -165,7 +166,7 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 	if len(parts) == 0 {
 		return time.Time{}, time.Time{}, false, nil
 	}
-	start, err := ParsePointTime(parts[0])
+	start, err := ParsePointTime(parts[0], loc)
 	if err != nil {
 		return time.Time{}, time.Time{}, false, invalidReferenceTime(parts[0], err)
 	}
@@ -186,68 +187,28 @@ func intervalFunctionBounds(raw string) (time.Time, time.Time, bool, error) {
 	}
 }
 
-func pointTime(value domain.FilterValue) (time.Time, bool, error) {
-	switch value.Kind {
-	case domain.FilterValuePointInTime:
-		point, err := ParsePointTime(value.Raw)
-		if err != nil {
-			return time.Time{}, false, invalidReferenceTime(value.Raw, err)
-		}
-		return point, true, nil
-	case domain.FilterValueTimeIntervalPointTime:
-		point, ok, err := intervalPointTime(value.Raw)
-		if err != nil || !ok {
-			return time.Time{}, ok, err
-		}
-		return point, true, nil
-	default:
-		return time.Time{}, false, nil
-	}
-}
-
-func intervalPointTime(raw string) (time.Time, bool, error) {
-	name, args, ok := functionCall(raw)
-	if !ok {
-		return time.Time{}, false, nil
-	}
-
-	start, end, ok, err := intervalFunctionBounds(args)
-	if err != nil || !ok {
-		return time.Time{}, ok, err
-	}
-
-	switch strings.ToLower(name) {
-	case "begin":
-		return start, true, nil
-	case "end":
-		return end, true, nil
-	default:
-		return time.Time{}, false, nil
-	}
-}
-
 func paddedPointWindow(point time.Time) quoteIndexWindow {
-	day := quoteIndexDate(point)
-	start := day.AddDate(0, 0, -1)
-	end := day.AddDate(0, 0, 1)
+	start := quoteIndexDate(point).AddDate(0, 0, -1)
+	end := quoteIndexDate(point).AddDate(0, 0, 1)
 	return quoteIndexWindow{start: &start, end: &end}
 }
 
-func intersectQuoteIndexWindow(left, right quoteIndexWindow) quoteIndexWindow {
-	if right.start != nil && (left.start == nil || right.start.After(*left.start)) {
-		left.start = right.start
+func intersectQuoteIndexWindow(w1, w2 quoteIndexWindow) quoteIndexWindow {
+	start := w1.start
+	if w2.start != nil && (start == nil || w2.start.After(*start)) {
+		start = w2.start
 	}
-	if right.end != nil && (left.end == nil || right.end.Before(*left.end)) {
-		left.end = right.end
+
+	end := w1.end
+	if w2.end != nil && (end == nil || w2.end.Before(*end)) {
+		end = w2.end
 	}
-	return left
+
+	return quoteIndexWindow{start: start, end: end}
 }
 
 func quoteIndicesBetween(start, end time.Time) []int {
-	start = quoteIndexDate(start)
-	end = quoteIndexDate(end)
-
-	indices := make([]int, 0, int(end.Sub(start).Hours()/24)+1)
+	indices := make([]int, 0)
 	for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
 		indices = append(indices, quoteIndex(day))
 	}
@@ -264,28 +225,40 @@ func quoteIndex(value time.Time) int {
 	return day.Year()*10000 + int(day.Month())*100 + day.Day()
 }
 
-func ParsePointTime(raw string) (time.Time, error) {
+func ParsePointTime(raw string, loc *time.Location) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	base, arithmeticOperator, period := splitPointTimeArithmetic(raw)
+
+	if loc == nil {
+		loc = time.UTC
+	}
 
 	var parsed time.Time
 	var err error
 
 	if strings.EqualFold(base, "now()") {
-		parsed = time.Now().UTC()
+		parsed = time.Now().In(loc)
 		if arithmeticOperator == "" {
-			return parsed, nil
+			return parsed.UTC(), nil
 		}
-		return applyPeriod(parsed, arithmeticOperator, period)
+		res, err := applyPeriod(parsed, arithmeticOperator, period)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return res.UTC(), nil
 	}
 
 	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
-		parsed, err = time.ParseInLocation(layout, base, time.UTC)
+		parsed, err = time.ParseInLocation(layout, base, loc)
 		if err == nil {
 			if arithmeticOperator == "" {
-				return parsed, nil
+				return parsed.UTC(), nil
 			}
-			return applyPeriod(parsed, arithmeticOperator, period)
+			res, err := applyPeriod(parsed, arithmeticOperator, period)
+			if err != nil {
+				return time.Time{}, err
+			}
+			return res.UTC(), nil
 		}
 	}
 	return time.Time{}, err
@@ -383,6 +356,45 @@ func hasQuoteIndexField(mappings []domain.Mapping) bool {
 		}
 	}
 	return false
+}
+
+func pointTime(value domain.FilterValue, loc *time.Location) (time.Time, bool, error) {
+	switch value.Kind {
+	case domain.FilterValuePointInTime:
+		point, err := ParsePointTime(value.Raw, loc)
+		if err != nil {
+			return time.Time{}, false, invalidReferenceTime(value.Raw, err)
+		}
+		return point, true, nil
+	case domain.FilterValueTimeIntervalPointTime:
+		point, ok, err := intervalPointTime(value.Raw, loc)
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		return point, ok, nil
+	default:
+		return time.Time{}, false, nil
+	}
+}
+
+func intervalPointTime(raw string, loc *time.Location) (time.Time, bool, error) {
+	_, args, ok := functionCall(raw)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	parts := splitArguments(args)
+	if len(parts) == 0 {
+		return time.Time{}, false, nil
+	}
+	point, err := ParsePointTime(parts[0], loc)
+	return point, err == nil, err
+}
+
+func loadLocation(name string) (*time.Location, error) {
+	if name == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(name)
 }
 
 func invalidReferenceTime(raw string, err error) error {

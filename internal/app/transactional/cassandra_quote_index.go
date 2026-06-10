@@ -19,7 +19,8 @@ func (p CassandraQuoteIndexPlanner) PlanQuoteIndices(_ context.Context, command 
 	if p.Now != nil {
 		now = p.Now
 	}
-	return cassandraQuoteIndices(command.Filters.Nodes, cassandraTimeZone(command.Mappings), now())
+	loc, _ := loadLocation(command.FilterTimeZone)
+	return cassandraQuoteIndices(command.Filters.Nodes, cassandraTimeZone(command.Mappings), now(), loc)
 }
 
 type cassandraDateRange struct {
@@ -27,20 +28,20 @@ type cassandraDateRange struct {
 	end   *time.Time
 }
 
-func cassandraQuoteIndices(nodes []domain.FilterNode, timezone string, now time.Time) ([]int, error) {
+func cassandraQuoteIndices(nodes []domain.FilterNode, timezone string, now time.Time, loc *time.Location) ([]int, error) {
 	location, err := loadCassandraLocation(timezone)
 	if err != nil {
 		return nil, err
 	}
 
-	dateRange, err := cassandraReferenceTimeRange(nodes, location, now)
+	dateRange, err := cassandraReferenceTimeRange(nodes, location, now, loc)
 	if err != nil {
 		return nil, err
 	}
 	return dateRange.cassandraQuoteIndices(now), nil
 }
 
-func cassandraReferenceTimeRange(nodes []domain.FilterNode, location *time.Location, now time.Time) (cassandraDateRange, error) {
+func cassandraReferenceTimeRange(nodes []domain.FilterNode, location *time.Location, now time.Time, loc *time.Location) (cassandraDateRange, error) {
 	var dateRange cassandraDateRange
 	foundReferenceTime := false
 
@@ -52,7 +53,7 @@ func cassandraReferenceTimeRange(nodes []domain.FilterNode, location *time.Locat
 		foundReferenceTime = true
 
 		if strings.EqualFold(filter.Operator, "in") && filter.Value.Kind == domain.FilterValueTimeInterval {
-			start, end, ok, err := intervalBounds(filter.Value)
+			start, end, ok, err := intervalBounds(filter.Value, loc)
 			if err != nil || !ok {
 				return cassandraDateRange{}, err
 			}
@@ -61,7 +62,7 @@ func cassandraReferenceTimeRange(nodes []domain.FilterNode, location *time.Locat
 			continue
 		}
 
-		point, ok, err := pointTime(filter.Value)
+		point, ok, err := pointTime(filter.Value, loc)
 		if err != nil || !ok {
 			return cassandraDateRange{}, err
 		}

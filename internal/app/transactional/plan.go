@@ -152,7 +152,7 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 
 	// Analyze ReferenceTime filters to decide how to split
 	location, _ := loadCassandraLocation(cassandraTimeZone(command.Mappings))
-	limits, err := cassandraReferenceTimeRange(command.Filters.Nodes, location, time.Now().UTC())
+	limits, err := cassandraReferenceTimeRange(command.Filters.Nodes, location, time.Now().UTC(), location)
 	if err != nil {
 		return nil, err
 	}
