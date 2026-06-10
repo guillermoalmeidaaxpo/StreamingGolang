@@ -92,22 +92,26 @@ func (b *CassandraQueryBuilder) buildStatement(table string, mapping domain.Mapp
 	if mapping.CassandraID == "" {
 		return "", nil, apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no Cassandra ID", mapping.ID))
 	}
-	if len(command.QuoteIndices) == 0 {
-		return "", nil, apperr.New(apperr.Invalid, fmt.Sprintf("Cassandra mapping %d requires ReferenceTime filters that generate quote indices", mapping.ID))
+
+	quoteIndices := command.QuoteIndices
+	forceNoRows := false
+	if len(quoteIndices) == 0 {
+		quoteIndices = []int{1}
+		forceNoRows = true
 	}
 
-	arguments := []any{mapping.CassandraID, command.QuoteIndices}
+	arguments := []any{mapping.CassandraID, quoteIndices}
 	where := []string{"ts_id = ?", "quote_index IN ?"}
 	columns := "ts_id, qte_y, qte_m, qte_d, quote_index, publish_time, del_y, del_m, del_d, del_h, del_min, del_offset, value"
 
-	deliveryCQL, deliveryArguments, noRows, err := buildDeliveryFilters(command.Filters.Nodes, cassandraTimeZone(mapping.ID), command.QuoteIndices[0])
+	deliveryCQL, deliveryArguments, noRows, err := buildDeliveryFilters(command.Filters.Nodes, cassandraTimeZone(mapping.ID), quoteIndices[0])
 	if err != nil {
 		return "", nil, err
 	}
-	if noRows {
+	if forceNoRows {
 		where = append(where, "(del_y, del_m, del_d, del_h) = (?, ?, ?, ?)")
 		arguments = append(arguments, int16(1), int8(1), int8(1), int8(0))
-	} else if deliveryCQL != "" {
+	} else if !noRows && deliveryCQL != "" {
 		where = append(where, deliveryCQL)
 		arguments = append(arguments, deliveryArguments...)
 	}

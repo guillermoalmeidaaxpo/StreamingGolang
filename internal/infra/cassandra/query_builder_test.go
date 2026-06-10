@@ -44,7 +44,7 @@ func TestCassandraQueryBuilderMatchesCSharpShape(t *testing.T) {
 	}
 }
 
-func TestCassandraQueryBuilderRequiresQuoteIndices(t *testing.T) {
+func TestCassandraQueryBuilderReturnsNoRowsWhenQuoteIndicesAreEmpty(t *testing.T) {
 	builder := NewCassandraQueryBuilder(map[string]string{"power": "hpfc"}, "ts")
 	command := domain.Command{
 		DataCategory: domain.Curves,
@@ -56,8 +56,19 @@ func TestCassandraQueryBuilderRequiresQuoteIndices(t *testing.T) {
 		}},
 	}
 
-	if _, err := builder.BuildQueries(context.Background(), command); err == nil {
-		t.Fatal("BuildQueries returned nil error, want quote-index validation error")
+	queries, err := builder.BuildQueries(context.Background(), command)
+	if err != nil {
+		t.Fatalf("BuildQueries returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("len(queries) = %d, want 1", len(queries))
+	}
+	if !strings.Contains(queries[0].Statement, "(del_y, del_m, del_d, del_h) = (?, ?, ?, ?)") {
+		t.Fatalf("statement missing no-row guard: %s", queries[0].Statement)
+	}
+	wantArguments := []any{"power:312091001", []int{1}, int16(1), int8(1), int8(1), int8(0)}
+	if !reflect.DeepEqual(queries[0].Arguments, wantArguments) {
+		t.Fatalf("arguments = %#v, want %#v", queries[0].Arguments, wantArguments)
 	}
 }
 

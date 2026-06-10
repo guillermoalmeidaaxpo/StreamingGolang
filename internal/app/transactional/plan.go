@@ -100,9 +100,16 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 				return Plan{}, err
 			}
 			command.Source = sourceFromMappings(command.Mappings)
-			command.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, command)
-			if err != nil {
-				return Plan{}, err
+			if command.Source == domain.SourceCassandra {
+				command.QuoteIndices, err = CassandraQuoteIndexPlanner{}.PlanQuoteIndices(ctx, command)
+				if err != nil {
+					return Plan{}, err
+				}
+			} else {
+				command.QuoteIndices, err = p.quoteIndices.PlanQuoteIndices(ctx, command)
+				if err != nil {
+					return Plan{}, err
+				}
 			}
 
 			splitCommands := p.strategy.Plan(command)
