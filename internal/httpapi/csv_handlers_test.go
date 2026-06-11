@@ -39,7 +39,7 @@ func TestGenericCSVEndpointExecutesTransactionalFlow(t *testing.T) {
 	}
 }
 
-func TestGenericJSONEndpointRequiresExplicitAccept(t *testing.T) {
+func TestGenericCSVEndpointIgnoresJSONAccept(t *testing.T) {
 	router := newCSVTestRouter()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/generic", strings.NewReader(`{"Id":10}`))
@@ -51,11 +51,11 @@ func TestGenericJSONEndpointRequiresExplicitAccept(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+	if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
 		t.Fatalf("content-type = %q", got)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`"transactionalData"`, `"status":"planned"`, `"referenceData":[10]`} {
+	for _, want := range []string{"status,source,dataCategory,statement,parameterCount", "planned,cmdp,,pending_query_generation,1"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q: %s", want, body)
 		}
@@ -87,7 +87,7 @@ func TestGenericCSVStreamingEndpointExecutesTransactionalFlow(t *testing.T) {
 	}
 }
 
-func TestGenericJSONStreamingEndpointRequiresExplicitAccept(t *testing.T) {
+func TestGenericCSVStreamingEndpointIgnoresJSONAccept(t *testing.T) {
 	router := newCSVTestRouter()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/generic/streaming", strings.NewReader(`{"Ids":[10,20]}`))
@@ -99,19 +99,18 @@ func TestGenericJSONStreamingEndpointRequiresExplicitAccept(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+	if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
 		t.Fatalf("content-type = %q", got)
 	}
-	body := strings.TrimSpace(rec.Body.String())
-	if !strings.HasPrefix(body, "[") || !strings.HasSuffix(body, "]") {
-		t.Fatalf("json stream should be an array: %s", body)
-	}
-	if !strings.Contains(body, `"status":"planned"`) {
-		t.Fatalf("body missing planned item: %s", body)
+	body := rec.Body.String()
+	for _, want := range []string{"status,source,dataCategory,statement,parameterCount", "planned,cmdp,,pending_query_generation,1"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q: %s", want, body)
+		}
 	}
 }
 
-func TestGenericNDJSONStreamingEndpointRequiresExplicitAccept(t *testing.T) {
+func TestGenericCSVStreamingEndpointIgnoresNDJSONAccept(t *testing.T) {
 	router := newCSVTestRouter()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/generic/streaming", strings.NewReader(`{"Ids":[10,20]}`))
@@ -123,16 +122,14 @@ func TestGenericNDJSONStreamingEndpointRequiresExplicitAccept(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
 	}
-	if got := rec.Header().Get("Content-Type"); got != "application/x-ndjson" {
+	if got := rec.Header().Get("Content-Type"); got != "text/csv; charset=utf-8" {
 		t.Fatalf("content-type = %q", got)
 	}
-	body := strings.TrimSpace(rec.Body.String())
-	if strings.HasPrefix(body, "[") {
-		t.Fatalf("ndjson must not start with JSON array bracket: %s", body)
-	}
-	lines := strings.Split(body, "\n")
-	if len(lines) != 2 {
-		t.Fatalf("line count = %d, want 2; body=%s", len(lines), body)
+	body := rec.Body.String()
+	for _, want := range []string{"status,source,dataCategory,statement,parameterCount", "planned,cmdp,,pending_query_generation,1"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q: %s", want, body)
+		}
 	}
 }
 
