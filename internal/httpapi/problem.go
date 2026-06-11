@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"strings"
 
 	"streaming-golang/internal/app/apperr"
 )
@@ -58,5 +60,23 @@ func writeAppError(w http.ResponseWriter, r *http.Request, err error) {
 		status = http.StatusServiceUnavailable
 	}
 
-	writeProblem(w, r, status, string(appError.Kind), appError.Message)
+	writeProblem(w, r, status, string(appError.Kind), appErrorDetail(appError))
+}
+
+func appErrorDetail(appError *apperr.Error) string {
+	if appError == nil {
+		return "An unexpected error occurred."
+	}
+	if shouldExposeAppErrorCause() {
+		return appError.Error()
+	}
+	return appError.Message
+}
+
+func shouldExposeAppErrorCause() bool {
+	if value, ok := os.LookupEnv("OUTBOUND_ERROR_DETAIL"); ok {
+		return strings.EqualFold(value, "true") || value == "1"
+	}
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("OUTBOUND_ENV")))
+	return env == "" || env == "development" || env == "dev" || env == "local"
 }
