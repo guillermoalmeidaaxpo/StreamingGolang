@@ -78,12 +78,12 @@
         "offset": { "type": "boolean" },
         "Offset": { "type": "boolean" },
         "nested": {
-          "type": "string",
-          "enum": ["yes", "no"]
+          "type": ["string", "null"],
+          "enum": ["yes", "no", null]
         },
         "Nested": {
-          "type": "string",
-          "enum": ["yes", "no"]
+          "type": ["string", "null"],
+          "enum": ["yes", "no", null]
         },
         "keys": { "$ref": "#/definitions/keys" },
         "Keys": { "$ref": "#/definitions/keys" },

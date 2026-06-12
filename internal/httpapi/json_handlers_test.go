@@ -107,6 +107,20 @@ func TestTransactionalStreamingAcceptsNullableTransformations(t *testing.T) {
 	}
 }
 
+func TestTransactionalStreamingAcceptsNullableNestedTransformation(t *testing.T) {
+	router := newCSVTestRouter()
+
+	body := `[{"ids":[504078501],"filters":{"filterTimeZone":"CET","expressions":["ReferenceTime = LatestGlobal()"]},"transformations":{"targetTimeZone":"CET","nested":null},"columns":["CreatedOn"]}]`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/timeseries/streaming", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
 func TestTransactionalEndpointRejectsUnknownSchemaFields(t *testing.T) {
 	router := newCSVTestRouter()
 

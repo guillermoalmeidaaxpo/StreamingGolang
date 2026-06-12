@@ -108,6 +108,10 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 		commands := commandsForRequest(requestContext, request, mappings)
 		for _, command := range commands {
 			command = selectFetchingStrategy(command)
+			command, err = p.normalizeDefaultFilters(ctx, command)
+			if err != nil {
+				return Plan{}, err
+			}
 			if err := validateAgainstMappings(requestContext, request, command, command.Mappings); err != nil {
 				return Plan{}, err
 			}
@@ -167,6 +171,35 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 	}
 
 	return Plan{Steps: steps}, nil
+}
+
+func (p requestPlanner) normalizeDefaultFilters(ctx context.Context, command Command) (Command, error) {
+	if !hasLatestGlobalFilter(command.Filters.Nodes) {
+		return command, nil
+	}
+
+	if command.Source == domain.SourceHyperscale {
+		command.Filters.Nodes = removeLatestGlobalFilters(command.Filters.Nodes)
+		p.logger.InfoContext(ctx, "latestGlobal filter resolved by hyperscale latest view",
+			slog.Any("identifiers", command.IDs),
+			slog.String("source", string(command.Source)),
+			slog.String("data_category", string(command.DataCategory)),
+		)
+		return command, nil
+	}
+
+	watermark, err := p.mappings.GetWatermark(ctx, command.Mappings)
+	if err != nil {
+		return Command{}, err
+	}
+	command.Filters.Nodes = replaceLatestGlobalFilters(command.Filters.Nodes, watermark)
+	p.logger.InfoContext(ctx, "latestGlobal filter resolved",
+		slog.Any("identifiers", command.IDs),
+		slog.String("source", string(command.Source)),
+		slog.String("data_category", string(command.DataCategory)),
+		slog.Time("reference_time", watermark),
+	)
+	return command, nil
 }
 
 func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command) ([]Command, error) {
@@ -251,6 +284,45 @@ func (p requestPlanner) splitHybridCommand(ctx context.Context, command Command)
 		slog.Time("watermark", watermark),
 	)
 	return []Command{cassandraCmd, cmdpCmd}, nil
+}
+
+func hasLatestGlobalFilter(nodes []domain.FilterNode) bool {
+	for _, node := range nodes {
+		filter, ok := node.(domain.ComparisonFilter)
+		if ok && filter.Value.Kind == domain.FilterValueLatestGlobal {
+			return true
+		}
+	}
+	return false
+}
+
+func removeLatestGlobalFilters(nodes []domain.FilterNode) []domain.FilterNode {
+	result := make([]domain.FilterNode, 0, len(nodes))
+	for _, node := range nodes {
+		filter, ok := node.(domain.ComparisonFilter)
+		if ok && filter.Value.Kind == domain.FilterValueLatestGlobal {
+			continue
+		}
+		result = append(result, node)
+	}
+	return result
+}
+
+func replaceLatestGlobalFilters(nodes []domain.FilterNode, referenceTime time.Time) []domain.FilterNode {
+	result := make([]domain.FilterNode, 0, len(nodes))
+	for _, node := range nodes {
+		filter, ok := node.(domain.ComparisonFilter)
+		if !ok || filter.Value.Kind != domain.FilterValueLatestGlobal {
+			result = append(result, node)
+			continue
+		}
+		filter.Value = domain.FilterValue{
+			Kind: domain.FilterValuePointInTime,
+			Raw:  referenceTime.UTC().Format(time.RFC3339Nano),
+		}
+		result = append(result, filter)
+	}
+	return result
 }
 
 func withCommandSource(command Command, source domain.SourceKind) Command {
