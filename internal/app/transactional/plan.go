@@ -174,12 +174,17 @@ func (p requestPlanner) BuildPlan(ctx context.Context, requestContext RequestCon
 }
 
 func (p requestPlanner) normalizeDefaultFilters(ctx context.Context, command Command) (Command, error) {
+	if command.Source == domain.SourceHyperscale && len(command.Filters.Nodes) == 0 {
+		command.LatestReferenceTime = true
+	}
+
 	if !hasLatestGlobalFilter(command.Filters.Nodes) {
 		return command, nil
 	}
 
 	if command.Source == domain.SourceHyperscale {
 		command.Filters.Nodes = removeLatestGlobalFilters(command.Filters.Nodes)
+		command.LatestReferenceTime = true
 		p.logger.InfoContext(ctx, "latestGlobal filter resolved by hyperscale latest view",
 			slog.Any("identifiers", command.IDs),
 			slog.String("source", string(command.Source)),
@@ -420,7 +425,7 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 	command := Command{
 		IDs:               append([]domain.Identifier(nil), ids...),
 		DataCategory:      category,
-		Columns:           append([]string(nil), request.Columns...),
+		Columns:           projectionColumns(request.Columns, mappings, includeIdentifier(requestContext)),
 		VersionAsOf:       request.VersionAsOf,
 		IncludeDeleted:    includeDeleted(request),
 		IncludeIdentifier: includeIdentifier(requestContext),
@@ -438,6 +443,77 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		}
 	}
 	return command
+}
+
+func projectionColumns(requested []string, mappings []Mapping, isCSVEndpoint bool) []string {
+	if len(mappings) == 0 {
+		return append([]string(nil), requested...)
+	}
+
+	if len(requested) == 0 {
+		return mappedColumnNames(mappings, isCSVEndpoint, false)
+	}
+
+	if len(requested) == 1 && strings.EqualFold(strings.TrimSpace(requested[0]), "CreatedOn") {
+		return mappedColumnNames(mappings, isCSVEndpoint, true)
+	}
+
+	available := make(map[string]string)
+	for _, mapping := range mappings {
+		for _, column := range mapping.Columns {
+			if strings.TrimSpace(column.MDSName) != "" {
+				available[strings.ToLower(column.MDSName)] = column.MDSName
+			}
+		}
+	}
+	available["createdon"] = "CreatedOn"
+
+	seen := make(map[string]struct{})
+	columns := make([]string, 0)
+	for _, mapping := range mappings {
+		for _, column := range mapping.Columns {
+			if column.IsProjectable {
+				continue
+			}
+			appendProjectionColumn(&columns, seen, column.MDSName, isCSVEndpoint)
+		}
+	}
+	for _, requestedColumn := range requested {
+		if mapped, ok := available[strings.ToLower(strings.TrimSpace(requestedColumn))]; ok {
+			appendProjectionColumn(&columns, seen, mapped, isCSVEndpoint)
+		}
+	}
+	return columns
+}
+
+func mappedColumnNames(mappings []Mapping, isCSVEndpoint bool, includeCreatedOn bool) []string {
+	seen := make(map[string]struct{})
+	columns := make([]string, 0)
+	for _, mapping := range mappings {
+		for _, column := range mapping.Columns {
+			appendProjectionColumn(&columns, seen, column.MDSName, isCSVEndpoint)
+		}
+	}
+	if includeCreatedOn {
+		appendProjectionColumn(&columns, seen, "CreatedOn", isCSVEndpoint)
+	}
+	return columns
+}
+
+func appendProjectionColumn(columns *[]string, seen map[string]struct{}, name string, isCSVEndpoint bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return
+	}
+	if !isCSVEndpoint && (strings.EqualFold(name, "Identifier") || strings.EqualFold(name, "MdoId")) {
+		return
+	}
+	key := strings.ToLower(name)
+	if _, exists := seen[key]; exists {
+		return
+	}
+	seen[key] = struct{}{}
+	*columns = append(*columns, name)
 }
 
 func filterTimeZone(request Request) string {

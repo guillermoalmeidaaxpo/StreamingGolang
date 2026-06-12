@@ -75,7 +75,7 @@ func (HyperscaleQueryBuilder) BuildQueries(_ context.Context, command domain.Com
 			continue
 		}
 
-		statement, parameters, err := buildHyperscaleStatement(mapping, command.Filters, command.Columns, command.VersionAsOf, command.IncludeDeleted, command.IncludeIdentifier)
+		statement, parameters, err := buildHyperscaleStatement(mapping, command.Filters, command.Columns, command.VersionAsOf, command.IncludeDeleted, command.IncludeIdentifier, command.LatestReferenceTime)
 		if err != nil {
 			return nil, err
 		}
@@ -141,8 +141,8 @@ func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexR
 	return statement, builder.parameters, nil
 }
 
-func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, requestedColumns []string, versionAsOf *time.Time, includeDeleted bool, includeIdentifier bool) (string, map[string]any, error) {
-	viewName, err := hyperscaleViewName(mapping, requestedColumns, versionAsOf)
+func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, requestedColumns []string, versionAsOf *time.Time, includeDeleted bool, includeIdentifier bool, latestReferenceTime bool) (string, map[string]any, error) {
+	viewName, err := hyperscaleViewName(mapping, requestedColumns, versionAsOf, latestReferenceTime)
 	if err != nil {
 		return "", nil, err
 	}
@@ -179,14 +179,14 @@ func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, 
 	where = append(where, filterPredicates...)
 
 	statement := fmt.Sprintf("SELECT %s FROM %s AS [d]",
-		strings.Join(hyperscaleSelectColumns(mapping.Columns, requestedColumns, valueColumn, includeIdentifier), ", "),
+		strings.Join(hyperscaleSelectColumns(mapping, requestedColumns, valueColumn, includeIdentifier, latestReferenceTime), ", "),
 		from,
 	)
 	if len(where) > 0 {
 		statement += " WHERE " + strings.Join(where, " AND ")
 	}
 
-	if order := hyperscaleOrderColumns(mapping.Columns, valueColumn, includeIdentifier); len(order) > 0 {
+	if order := hyperscaleOrderColumns(mapping.Columns, valueColumn, includeIdentifier, latestReferenceTime); len(order) > 0 {
 		statement += " ORDER BY " + strings.Join(order, ", ")
 	}
 	return statement, builder.parameters, nil
@@ -355,8 +355,13 @@ func selectColumns(columns []domain.ColumnMapping, requestedColumns []string) []
 	return expressions
 }
 
-func hyperscaleSelectColumns(columns []domain.ColumnMapping, requestedColumns []string, valueColumn string, includeIdentifier bool) []string {
+func hyperscaleSelectColumns(mapping domain.Mapping, requestedColumns []string, valueColumn string, includeIdentifier bool, latestReferenceTime bool) []string {
 	requested := requestedColumnSet(requestedColumns)
+	if latestReferenceTime && mapping.DataCategory == domain.TimeSeries {
+		return hyperscaleLatestReferenceTimeTimeseriesColumns(mapping.Columns, requested, valueColumn, includeIdentifier)
+	}
+
+	columns := mapping.Columns
 	selected := make([]domain.ColumnMapping, 0, len(columns))
 	for _, column := range columns {
 		if strings.TrimSpace(column.SourceName) == "" && strings.TrimSpace(column.MDSName) == "" {
@@ -410,7 +415,79 @@ func hyperscaleSelectColumns(columns []domain.ColumnMapping, requestedColumns []
 		}
 		expressions = append(expressions, expression)
 	}
+	if hasRequestedColumnInSet(requested, "CreatedOn") {
+		expressions = append(expressions, qualify("CreatedOn"))
+	}
 	return expressions
+}
+
+func hyperscaleLatestReferenceTimeTimeseriesColumns(columns []domain.ColumnMapping, requested map[string]struct{}, valueColumn string, includeIdentifier bool) []string {
+	expressions := make([]string, 0)
+	keyColumns := make([]domain.ColumnMapping, 0)
+	for _, column := range columns {
+		if !column.IsKey {
+			continue
+		}
+		if isIdentifierColumn(column) && !includeIdentifier {
+			continue
+		}
+		keyColumns = append(keyColumns, column)
+	}
+	sort.SliceStable(keyColumns, func(i, j int) bool {
+		return columnSortValue(keyColumns[i]) < columnSortValue(keyColumns[j])
+	})
+	if len(keyColumns) == 0 {
+		expressions = append(expressions, qualify("ReferenceTime"))
+	} else {
+		for _, column := range keyColumns {
+			expressions = append(expressions, qualify(hyperscalePhysicalColumnName(column)))
+		}
+	}
+
+	valueColumns := make([]domain.ColumnMapping, 0)
+	for _, column := range columns {
+		if column.IsKey || strings.EqualFold(column.MDSName, "Identifier") || strings.EqualFold(column.MDSName, "ReferenceTime") {
+			continue
+		}
+		if !column.IsProjectable {
+			continue
+		}
+		if len(requested) > 0 && !hasRequestedColumnInSet(requested, column.MDSName) && !hasRequestedColumnInSet(requested, column.SourceName) && !hasRequestedColumnInSet(requested, "CreatedOn") {
+			continue
+		}
+		valueColumns = append(valueColumns, column)
+	}
+	if len(valueColumns) == 0 {
+		valueColumns = append(valueColumns, domain.ColumnMapping{MDSName: "Value", SourceName: "Value"})
+	}
+	sort.SliceStable(valueColumns, func(i, j int) bool {
+		return columnSortValue(valueColumns[i]) < columnSortValue(valueColumns[j])
+	})
+	for index, column := range valueColumns {
+		name := firstNonEmpty(column.MDSName, column.SourceName, "Value")
+		expressions = append(expressions, hyperscaleJSONValueExpression(valueColumn, name, column.DataType)+fmt.Sprintf(" AS [Property%d]", index))
+	}
+	if hasRequestedColumnInSet(requested, "CreatedOn") {
+		expressions = append(expressions, qualify("CreatedOn"))
+	}
+	return expressions
+}
+
+func findColumn(columns []domain.ColumnMapping, name string) (domain.ColumnMapping, bool) {
+	for _, column := range columns {
+		if strings.EqualFold(column.MDSName, name) || strings.EqualFold(column.SourceName, name) {
+			return column, true
+		}
+	}
+	return domain.ColumnMapping{}, false
+}
+
+func hasRequestedColumnInSet(requested map[string]struct{}, name string) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	_, ok := requested[strings.ToLower(strings.TrimSpace(name))]
+	return ok
 }
 
 func requestedColumnSet(columns []string) map[string]struct{} {
@@ -487,7 +564,45 @@ func orderColumns(columns []domain.ColumnMapping) []string {
 	return order
 }
 
-func hyperscaleOrderColumns(columns []domain.ColumnMapping, valueColumn string, includeIdentifier bool) []string {
+func orderByMDSColumns(columns []domain.ColumnMapping) []string {
+	ordered := make([]domain.ColumnMapping, 0)
+	for _, column := range columns {
+		if column.OrderPriority != nil {
+			ordered = append(ordered, column)
+		}
+	}
+	if len(ordered) == 0 {
+		return []string{qualify("ReferenceTime")}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if *ordered[i].OrderPriority == *ordered[j].OrderPriority {
+			return ordered[i].MDSName < ordered[j].MDSName
+		}
+		return *ordered[i].OrderPriority < *ordered[j].OrderPriority
+	})
+	order := make([]string, 0, len(ordered))
+	seen := make(map[string]struct{}, len(ordered))
+	for _, column := range ordered {
+		name := hyperscalePhysicalColumnName(column)
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		order = append(order, qualify(name))
+	}
+	return order
+}
+
+func hyperscaleOrderColumns(columns []domain.ColumnMapping, valueColumn string, includeIdentifier bool, latestReferenceTime bool) []string {
+	if latestReferenceTime {
+		order := orderByMDSColumns(columns)
+		if len(order) > 0 {
+			return order
+		}
+		return []string{qualify("ReferenceTime")}
+	}
+
 	ordered := make([]domain.ColumnMapping, 0)
 	for _, column := range columns {
 		if strings.TrimSpace(column.SourceName) == "" && strings.TrimSpace(column.MDSName) == "" {
@@ -547,10 +662,21 @@ func isIdentifierColumn(column domain.ColumnMapping) bool {
 		strings.EqualFold(column.SourceName, "MdoId")
 }
 
-func hyperscaleViewName(mapping domain.Mapping, requestedColumns []string, versionAsOf *time.Time) (string, error) {
+func hyperscaleViewName(mapping domain.Mapping, requestedColumns []string, versionAsOf *time.Time, latestReferenceTime bool) (string, error) {
 	var viewName string
 	if versionAsOf != nil {
-		viewName = firstNonEmpty(mapping.Views.GetByCreatedOn, defaultHyperscaleGetByCreatedOnView(mapping.DataCategory))
+		if latestReferenceTime {
+			viewName = firstNonEmpty(mapping.Views.GetByCreatedOnLatestReferenceTime, defaultHyperscaleGetByCreatedOnLatestReferenceTimeView(mapping.DataCategory))
+		} else {
+			viewName = firstNonEmpty(mapping.Views.GetByCreatedOn, defaultHyperscaleGetByCreatedOnView(mapping.DataCategory))
+		}
+	} else if latestReferenceTime {
+		viewName = firstNonEmpty(
+			mapping.Views.LatestReferenceTime,
+			mapping.Views.LatestReferenceTimeWithCreatedOn,
+			defaultHyperscaleLatestReferenceTimeView(mapping.DataCategory),
+			defaultHyperscaleLatestReferenceTimeWithCreatedOnView(mapping.DataCategory),
+		)
 	} else if hasRequestedColumn(requestedColumns, "CreatedOn") {
 		viewName = firstNonEmpty(mapping.Views.LatestVersionWithCreatedOn, defaultHyperscaleLatestVersionWithCreatedOnView(mapping.DataCategory))
 	} else {
@@ -560,6 +686,25 @@ func hyperscaleViewName(mapping domain.Mapping, requestedColumns []string, versi
 		return "", apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no hyperscale view for data category %q", mapping.ID, mapping.DataCategory))
 	}
 	return viewName, nil
+}
+
+func defaultHyperscaleLatestReferenceTimeView(category domain.DataCategory) string {
+	name, ok := hyperscaleCategoryName(category)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("Api.VI_%sLatestVersionLatestReferenceTime", name)
+}
+
+func defaultHyperscaleLatestReferenceTimeWithCreatedOnView(category domain.DataCategory) string {
+	name, ok := hyperscaleCategoryName(category)
+	if !ok {
+		return ""
+	}
+	if category == domain.TimeSeries {
+		return fmt.Sprintf("Api.VI_%sLatestVersionLatestReferenceTime", name)
+	}
+	return fmt.Sprintf("Api.VI_%sLatestVersionLatestReferenceTimeWithCreatedOn", name)
 }
 
 func hasRequestedColumn(columns []string, name string) bool {
@@ -598,6 +743,14 @@ func defaultHyperscaleGetByCreatedOnView(category domain.DataCategory) string {
 	return fmt.Sprintf("Api.TVF_Get%sByCreatedOn", name)
 }
 
+func defaultHyperscaleGetByCreatedOnLatestReferenceTimeView(category domain.DataCategory) string {
+	name, ok := hyperscaleCategoryName(category)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("Api.TVF_Get%sByCreatedOnLatestReferenceTime", name)
+}
+
 func hyperscaleCategoryName(category domain.DataCategory) (string, bool) {
 	switch category {
 	case domain.Curves:
@@ -618,14 +771,18 @@ func hyperscaleValueColumn(category domain.DataCategory) (string, error) {
 	case domain.Surfaces:
 		return "SurfaceValue", nil
 	case domain.TimeSeries:
-		return "TimeseriesValue", nil
+		return "TimeSeriesValue", nil
 	default:
 		return "", apperr.New(apperr.Invalid, fmt.Sprintf("no hyperscale value column for data category %q", category))
 	}
 }
 
+func hyperscaleJSONTextValueExpression(valueColumn, fieldName string) string {
+	return fmt.Sprintf("JSON_VALUE(%s, '$.\"%s\"')", qualify(valueColumn), strings.ReplaceAll(fieldName, `"`, `\"`))
+}
+
 func hyperscaleJSONValueExpression(valueColumn, fieldName, dataType string) string {
-	jsonValue := fmt.Sprintf("JSON_VALUE(%s, '$.\"%s\"')", qualify(valueColumn), strings.ReplaceAll(fieldName, `"`, `\"`))
+	jsonValue := hyperscaleJSONTextValueExpression(valueColumn, fieldName)
 	switch strings.ToLower(strings.TrimSpace(dataType)) {
 	case "int", "integer", "bigint", "long":
 		return fmt.Sprintf("CAST(%s AS BIGINT)", jsonValue)

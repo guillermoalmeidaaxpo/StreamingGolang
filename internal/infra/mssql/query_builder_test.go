@@ -190,6 +190,91 @@ func TestHyperscaleQueryBuilderIncludesIdentifierForCSV(t *testing.T) {
 	assertContains(t, statement, "ORDER BY [d].[MdoId]")
 }
 
+func TestHyperscaleQueryBuilderBuildsLatestGlobalTimeseriesStatementLikeCSharp(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:        domain.TimeSeries,
+		Columns:             []string{"CreatedOn"},
+		LatestReferenceTime: true,
+		IncludeIdentifier:   false,
+		IncludeDeleted:      false,
+		Mappings: []domain.Mapping{{
+			ID:           504078501,
+			DataCategory: domain.TimeSeries,
+			Source:       domain.SourceHyperscale,
+			Views: domain.MappingViews{
+				LatestReferenceTime:              "Api.VI_TimeseriesLatestVersionLatestReferenceTime",
+				LatestReferenceTimeWithCreatedOn: "Api.VI_TimeseriesLatestVersionLatestReferenceTimeWithCreatedOn",
+			},
+			Columns: []domain.ColumnMapping{
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, `SELECT [d].[ReferenceTime], CAST(JSON_VALUE([d].[TimeSeriesValue], '$."Value"') AS FLOAT) AS [Property0], [d].[CreatedOn]`)
+	assertContains(t, statement, "FROM [Api].[VI_TimeseriesLatestVersionLatestReferenceTime] AS [d]")
+	assertContains(t, statement, "[d].[MdoId] = @id")
+	assertContains(t, statement, "[d].[Deleted] = 0")
+	assertContains(t, statement, "ORDER BY [d].[ReferenceTime]")
+	assertNotContains(t, statement, "[d].[MdoId] AS [Identifier]")
+
+	if queries[0].Parameters["id"] != int64(504078501) {
+		t.Fatalf("id parameter = %#v", queries[0].Parameters["id"])
+	}
+}
+
+func TestHyperscaleQueryBuilderUsesCreatedOnLatestReferenceTimeTVF(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	versionAsOf := time.Date(2025, 5, 5, 7, 0, 0, 0, time.UTC)
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:        domain.TimeSeries,
+		Columns:             []string{"ReferenceTime", "Value", "CreatedOn"},
+		VersionAsOf:         &versionAsOf,
+		LatestReferenceTime: true,
+		Mappings: []domain.Mapping{{
+			ID:           504078501,
+			DataCategory: domain.TimeSeries,
+			Source:       domain.SourceHyperscale,
+			Views: domain.MappingViews{
+				GetByCreatedOn:                    "Api.TVF_GetTimeseriesByCreatedOn",
+				GetByCreatedOnLatestReferenceTime: "Api.TVF_GetTimeseriesByCreatedOnLatestReferenceTime",
+			},
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "FROM [Api].[TVF_GetTimeseriesByCreatedOnLatestReferenceTime](@MdoId, @CreatedOn, @IncludeDeleted) AS [d]")
+	assertContains(t, statement, `CAST(JSON_VALUE([d].[TimeSeriesValue], '$."Value"') AS FLOAT) AS [Value]`)
+	assertContains(t, statement, "[d].[CreatedOn]")
+	if queries[0].Parameters["MdoId"] != int64(504078501) {
+		t.Fatalf("MdoId parameter = %#v", queries[0].Parameters["MdoId"])
+	}
+}
+
 func assertContains(t *testing.T, text, substring string) {
 	t.Helper()
 	if !strings.Contains(text, substring) {

@@ -3,22 +3,23 @@ package domain
 import "time"
 
 type Command struct {
-	IDs               []Identifier
-	DataCategory      DataCategory
-	Columns           []string
-	VersionAsOf       *time.Time
-	IncludeDeleted    bool
-	IncludeIdentifier bool
-	IncludeOffset     bool
-	FilterTimeZone    string
-	TargetTimeZone    string
-	HasAggregations   bool
-	HasShape          bool
-	Filters           FilterSet
-	Mappings          []Mapping
-	Source            SourceKind
-	QuoteIndices      []int
-	IndexRange        *IndexRange
+	IDs                 []Identifier
+	DataCategory        DataCategory
+	Columns             []string
+	VersionAsOf         *time.Time
+	IncludeDeleted      bool
+	IncludeIdentifier   bool
+	IncludeOffset       bool
+	FilterTimeZone      string
+	TargetTimeZone      string
+	HasAggregations     bool
+	HasShape            bool
+	LatestReferenceTime bool
+	Filters             FilterSet
+	Mappings            []Mapping
+	Source              SourceKind
+	QuoteIndices        []int
+	IndexRange          *IndexRange
 }
 
 type IndexRange struct {

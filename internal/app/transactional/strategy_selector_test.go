@@ -120,6 +120,61 @@ func TestPlannerKeepsHyperscaleAheadOfCMDPRules(t *testing.T) {
 	assertStrategySource(t, plan, domain.SourceHyperscale)
 }
 
+func TestPlannerExpandsCreatedOnProjectionLikeCSharp(t *testing.T) {
+	hyperscaleID := domain.Identifier(504078501)
+	plan := buildStrategyPlan(t, domain.Mapping{
+		ID:           504078501,
+		DataCategory: domain.TimeSeries,
+		Source:       domain.SourceHyperscale,
+		HyperscaleID: &hyperscaleID,
+		Columns: []domain.ColumnMapping{
+			{MDSName: "Identifier", SourceName: "Identifier", IsKey: true},
+			{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+			{MDSName: "Value", SourceName: "Value", IsProjectable: true},
+		},
+	}, func(request *Request) {
+		request.Columns = []string{"CreatedOn"}
+	})
+
+	command := plan.Steps[0].Command
+	assertColumns(t, command.Columns, []string{"ReferenceTime", "Value", "CreatedOn"})
+	if !command.LatestReferenceTime {
+		t.Fatal("hyperscale command without real filters should use latest-reference-time view")
+	}
+}
+
+func TestPlannerKeepsCSVIdentifierWhenExpandingCreatedOnProjection(t *testing.T) {
+	hyperscaleID := domain.Identifier(504078501)
+	planner := NewPlanner(
+		WithMappingResolver(fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           504078501,
+			DataCategory: domain.TimeSeries,
+			Source:       domain.SourceHyperscale,
+			HyperscaleID: &hyperscaleID,
+			Columns: []domain.ColumnMapping{
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", IsProjectable: true},
+			},
+		}}}),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.TimeSeries,
+		Stage:        "development",
+		Mode:         ModeCSV,
+	}, []Request{{
+		IDs:     []domain.Identifier{504078501},
+		Columns: []string{"CreatedOn"},
+	}})
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+
+	assertColumns(t, plan.Steps[0].Command.Columns, []string{"Identifier", "ReferenceTime", "Value", "CreatedOn"})
+}
+
 func TestPlannerSelectsCMDPForNonZurichCassandraTimeZone(t *testing.T) {
 	plan := buildStrategyPlan(t, domain.Mapping{
 		ID:           536960251,
@@ -173,5 +228,17 @@ func assertStrategySource(t *testing.T, plan Plan, want domain.SourceKind) {
 	}
 	if plan.Steps[0].Queries[0].Source != want {
 		t.Fatalf("query source = %q, want %q", plan.Steps[0].Queries[0].Source, want)
+	}
+}
+
+func assertColumns(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("columns = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("columns = %#v, want %#v", got, want)
+		}
 	}
 }
