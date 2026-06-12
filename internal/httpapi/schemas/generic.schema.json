@@ -17,10 +17,10 @@
     "Ids": { "$ref": "#/definitions/ids" },
     "versionAsOf": { "type": "string", "format": "date-time" },
     "VersionAsOf": { "type": "string", "format": "date-time" },
-    "filters": { "$ref": "#/definitions/filters" },
-    "Filters": { "$ref": "#/definitions/filters" },
-    "transformations": { "$ref": "#/definitions/transformations" },
-    "Transformations": { "$ref": "#/definitions/transformations" },
+    "filters": { "$ref": "#/definitions/nullableFilters" },
+    "Filters": { "$ref": "#/definitions/nullableFilters" },
+    "transformations": { "$ref": "#/definitions/nullableTransformations" },
+    "Transformations": { "$ref": "#/definitions/nullableTransformations" },
     "columns": { "$ref": "#/definitions/columns" },
     "Columns": { "$ref": "#/definitions/columns" },
     "includeDeleted": { "type": "boolean" },
@@ -57,6 +57,12 @@
         "Shape": {}
       }
     },
+    "nullableFilters": {
+      "anyOf": [
+        { "$ref": "#/definitions/filters" },
+        { "type": "null" }
+      ]
+    },
     "expressions": {
       "type": "array",
       "items": { "type": "string" }
@@ -84,6 +90,12 @@
         "values": { "$ref": "#/definitions/values" },
         "Values": { "$ref": "#/definitions/values" }
       }
+    },
+    "nullableTransformations": {
+      "anyOf": [
+        { "$ref": "#/definitions/transformations" },
+        { "type": "null" }
+      ]
     },
     "keys": {
       "type": "array",

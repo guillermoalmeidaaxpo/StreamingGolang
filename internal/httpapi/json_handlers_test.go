@@ -93,6 +93,20 @@ func TestTransactionalStreamingNegotiatesNDJSON(t *testing.T) {
 	}
 }
 
+func TestTransactionalStreamingAcceptsNullableTransformations(t *testing.T) {
+	router := newCSVTestRouter()
+
+	body := `[{"ids":[1000000001],"filters":{"filterTimeZone":"CET","expressions":["ReferenceTime >= now()+P1D"]},"transformations":null,"columns":["CreatedOn"]}]`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/surfaces/streaming", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
 func TestTransactionalEndpointRejectsUnknownSchemaFields(t *testing.T) {
 	router := newCSVTestRouter()
 
