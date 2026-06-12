@@ -2,6 +2,17 @@
 
 Configuration is Go-native and container-friendly.
 
+Code source of truth:
+
+```text
+internal/platform/config
+configs/default.yaml
+configs/development.yaml
+```
+
+When configuration structs, YAML keys, or `OUTBOUND_*` overrides change, update
+this document in the same change.
+
 Load order:
 
 1. `configs/default.yaml`
