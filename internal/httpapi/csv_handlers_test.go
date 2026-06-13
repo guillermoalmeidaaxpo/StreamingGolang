@@ -133,6 +133,29 @@ func TestGenericCSVStreamingEndpointIgnoresNDJSONAccept(t *testing.T) {
 	}
 }
 
+func TestCSVColumnsFromPlanUsesAggregationColumns(t *testing.T) {
+	plan := transactional.Plan{Steps: []transactional.PlanStep{{
+		Command: transactional.Command{
+			HasAggregations: true,
+			Columns:         []string{"Identifier", "ReferenceTime", "DeliveryBucket", "AverageValue"},
+			Mappings: []domain.Mapping{{
+				ID:           10,
+				DataCategory: domain.Curves,
+				Columns: []domain.ColumnMapping{
+					{MDSName: "ReferenceTime", SourceName: "QuoteTime"},
+					{MDSName: "Value", SourceName: "Value"},
+				},
+			}},
+		},
+	}}}
+
+	columns := csvColumnsFromPlan(plan)
+	want := []string{"Identifier", "ReferenceTime", "DeliveryBucket", "AverageValue"}
+	if strings.Join(columns, ",") != strings.Join(want, ",") {
+		t.Fatalf("columns = %#v, want %#v", columns, want)
+	}
+}
+
 func TestLiteCSVEndpointBuildsReferenceTimeFilters(t *testing.T) {
 	router := newCSVTestRouter()
 

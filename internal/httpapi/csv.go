@@ -21,7 +21,7 @@ func writeTransactionalCSV(w http.ResponseWriter, response transactional.Respons
 	if len(columns) == 0 {
 		columns = csvColumns(response.TransactionalData)
 	}
-	if len(columns) == 0 || len(response.TransactionalData) == 0 {
+	if len(columns) == 0 {
 		return nil
 	}
 
@@ -97,6 +97,12 @@ func csvColumnsFromPlan(plan transactional.Plan) []string {
 	seen := make(map[string]struct{})
 	for _, step := range plan.Steps {
 		command := step.Command
+		if command.HasAggregations && len(command.Columns) > 0 {
+			for _, column := range command.Columns {
+				columns = appendCSVColumn(columns, seen, column)
+			}
+			continue
+		}
 		requested := requestedCSVColumns(command.Columns)
 		hasHyperscale := false
 		beforeCommandColumns := len(columns)

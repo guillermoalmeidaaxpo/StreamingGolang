@@ -21,6 +21,9 @@ func validateAgainstMappings(requestContext RequestContext, request Request, com
 	if err := validateShape(command, mappings); err != nil {
 		return err
 	}
+	if err := validateAggregations(command, mappings); err != nil {
+		return err
+	}
 	if err := validateProjectionColumns(request, mappings); err != nil {
 		return err
 	}
@@ -92,6 +95,9 @@ func validateShape(command Command, mappings []domain.Mapping) error {
 }
 
 func validateProjectionColumns(request Request, mappings []domain.Mapping) error {
+	if request.Transformations != nil && (len(request.Transformations.Keys) > 0 || len(request.Transformations.Values) > 0) {
+		return nil
+	}
 	if len(request.Columns) == 0 || !hasColumnMetadata(mappings) {
 		return nil
 	}
@@ -107,6 +113,64 @@ func validateProjectionColumns(request Request, mappings []domain.Mapping) error
 	return nil
 }
 
+func validateAggregations(command Command, mappings []domain.Mapping) error {
+	if !command.HasAggregations || command.Aggregations == nil {
+		return nil
+	}
+	if command.DataCategory != domain.Curves {
+		return apperr.New(apperr.Invalid, "Aggregation endpoint is only supported for data category 'Curve'.")
+	}
+	for _, group := range command.Aggregations.GroupBy {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(group.Expression)), "aggregate(") {
+			continue
+		}
+		if !mappedColumnExists(mappings, group.Expression) {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("aggregation key column %q is not mapped", group.Expression))
+		}
+	}
+	aliases := make(map[string]struct{})
+	for _, expression := range append([]domain.AggregationColumn{}, command.Aggregations.GroupBy...) {
+		alias := strings.ToLower(strings.TrimSpace(expression.Alias))
+		if alias == "" {
+			continue
+		}
+		if _, exists := aliases[alias]; exists {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("duplicate aggregation alias %q", expression.Alias))
+		}
+		aliases[alias] = struct{}{}
+	}
+	for _, expression := range command.Aggregations.Expressions {
+		alias := strings.ToLower(strings.TrimSpace(expression.Alias))
+		if alias != "" {
+			if _, exists := aliases[alias]; exists {
+				return apperr.New(apperr.Invalid, fmt.Sprintf("duplicate aggregation alias %q", expression.Alias))
+			}
+			aliases[alias] = struct{}{}
+		}
+		columnName := aggregationValueColumn(expression.Expression)
+		if strings.EqualFold(columnName, "*") {
+			continue
+		}
+		column, ok := mappedColumn(mappings, columnName)
+		if !ok {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("aggregation value column %q is not mapped", columnName))
+		}
+		if column.IsKey {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("aggregation value column %q cannot be a key column", columnName))
+		}
+	}
+	return nil
+}
+
+func aggregationValueColumn(expression string) string {
+	open := strings.Index(expression, "(")
+	close := strings.LastIndex(expression, ")")
+	if open < 0 || close <= open {
+		return ""
+	}
+	return strings.TrimSpace(expression[open+1 : close])
+}
+
 func validateFilterColumns(request Request, command Command, mappings []domain.Mapping) error {
 	if request.Filters == nil || len(command.Filters.Nodes) == 0 || !hasColumnMetadata(mappings) {
 		return nil
@@ -119,19 +183,40 @@ func validateFilterColumns(request Request, command Command, mappings []domain.M
 				return err
 			}
 		case domain.RankOverFilter:
-			if command.HasAggregations {
-				return apperr.New(apperr.Invalid, "rankover filters cannot be combined with aggregations")
-			}
-			for _, field := range filter.PartitionBy {
-				if !mappedColumnExists(mappings, field) {
-					return apperr.New(apperr.Invalid, fmt.Sprintf("rankover partition column %q is not mapped", field))
-				}
-			}
-			for _, order := range filter.OrderBy {
-				if !mappedColumnExists(mappings, order.Field) {
-					return apperr.New(apperr.Invalid, fmt.Sprintf("rankover order column %q is not mapped", order.Field))
-				}
-			}
+			return validateRankOverFilter(command, mappings, filter)
+		}
+	}
+	return nil
+}
+
+func validateRankOverFilter(command Command, mappings []domain.Mapping, filter domain.RankOverFilter) error {
+	if command.HasAggregations {
+		return apperr.New(apperr.Invalid, "rankover filters cannot be combined with aggregations")
+	}
+	if command.DataCategory == domain.TimeSeries {
+		return apperr.New(apperr.Invalid, "rankover filters are only available for curves and surfaces")
+	}
+	for _, mapping := range mappings {
+		if strings.TrimSpace(mapping.CassandraID) != "" || mapping.HyperscaleID != nil || mapping.Source == domain.SourceHyperscale || mapping.Source == domain.SourceCassandra {
+			return apperr.New(apperr.Invalid, "rankover filters are only supported for CMDP-hosted IDs")
+		}
+	}
+	for _, field := range filter.PartitionBy {
+		column, ok := mappedColumn(mappings, field)
+		if !ok {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("rankover partition column %q is not mapped", field))
+		}
+		if !column.IsKey || isRankOverExcludedColumn(column, field) {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("invalid rankover partition column %q", field))
+		}
+	}
+	for _, order := range filter.OrderBy {
+		column, ok := mappedColumn(mappings, order.Field)
+		if !ok {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("rankover order column %q is not mapped", order.Field))
+		}
+		if isRankOverExcludedColumn(column, order.Field) {
+			return apperr.New(apperr.Invalid, fmt.Sprintf("invalid rankover order column %q", order.Field))
 		}
 	}
 	return nil
@@ -174,15 +259,31 @@ func hasColumnMetadata(mappings []domain.Mapping) bool {
 }
 
 func mappedColumnExists(mappings []domain.Mapping, name string) bool {
+	_, ok := mappedColumn(mappings, name)
+	return ok
+}
+
+func mappedColumn(mappings []domain.Mapping, name string) (domain.ColumnMapping, bool) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return false
+		return domain.ColumnMapping{}, false
 	}
 	for _, mapping := range mappings {
 		for _, column := range mapping.Columns {
 			if strings.EqualFold(column.MDSName, name) || strings.EqualFold(column.SourceName, name) {
-				return true
+				return column, true
 			}
+		}
+	}
+	return domain.ColumnMapping{}, false
+}
+
+func isRankOverExcludedColumn(column domain.ColumnMapping, requested string) bool {
+	for _, name := range []string{requested, column.MDSName, column.SourceName} {
+		if strings.EqualFold(strings.TrimSpace(name), "Identifier") ||
+			strings.EqualFold(strings.TrimSpace(name), "MdoId") ||
+			strings.EqualFold(strings.TrimSpace(name), "RelativeDeliveryPeriod") {
+			return true
 		}
 	}
 	return false

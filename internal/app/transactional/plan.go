@@ -382,6 +382,15 @@ func hasReferenceTimeFilter(nodes []domain.FilterNode) bool {
 	return false
 }
 
+func hasRankOverFilter(nodes []domain.FilterNode) bool {
+	for _, node := range nodes {
+		if _, ok := node.(domain.RankOverFilter); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func referenceTimeEqualityPoint(nodes []domain.FilterNode, loc *time.Location) (time.Time, bool, error) {
 	for _, node := range nodes {
 		filter, ok := node.(domain.ComparisonFilter)
@@ -422,17 +431,19 @@ func commandsForRequest(requestContext RequestContext, request Request, mappings
 }
 
 func newCommand(requestContext RequestContext, request Request, category domain.DataCategory, ids []domain.Identifier, mappings []Mapping) Command {
+	aggregations := aggregationsFromTransformations(request.Transformations)
 	command := Command{
 		IDs:               append([]domain.Identifier(nil), ids...),
 		DataCategory:      category,
-		Columns:           projectionColumns(request.Columns, mappings, includeIdentifier(requestContext)),
+		Columns:           projectionColumnsForRequest(request.Columns, mappings, includeIdentifier(requestContext), aggregations),
 		VersionAsOf:       request.VersionAsOf,
 		IncludeDeleted:    includeDeleted(request),
 		IncludeIdentifier: includeIdentifier(requestContext),
 		IncludeOffset:     includeOffset(requestContext, request),
 		FilterTimeZone:    filterTimeZone(request),
-		TargetTimeZone:    targetTimeZone(request),
-		HasAggregations:   hasAggregations(request),
+		TargetTimeZone:    targetTimeZone(request, aggregations != nil),
+		HasAggregations:   aggregations != nil,
+		Aggregations:      aggregations,
 		HasShape:          request.Filters != nil && len(request.Filters.Shape) > 0,
 		Mappings:          append([]Mapping(nil), mappings...),
 	}
@@ -443,6 +454,13 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		}
 	}
 	return command
+}
+
+func projectionColumnsForRequest(requested []string, mappings []Mapping, isCSVEndpoint bool, aggregations *domain.Aggregations) []string {
+	if aggregations != nil {
+		return aggregatedColumnNames(aggregations, anyHyperscale(mappings), requested)
+	}
+	return projectionColumns(requested, mappings, isCSVEndpoint)
 }
 
 func projectionColumns(requested []string, mappings []Mapping, isCSVEndpoint bool) []string {
@@ -538,8 +556,11 @@ func includeOffset(requestContext RequestContext, request Request) bool {
 	return request.Transformations != nil && request.Transformations.Offset != nil && *request.Transformations.Offset
 }
 
-func targetTimeZone(request Request) string {
+func targetTimeZone(request Request, hasAggregations bool) string {
 	if request.Transformations == nil {
+		if hasAggregations {
+			return "UTC"
+		}
 		return ""
 	}
 	if request.Transformations.TargetTimeZone != "" {
@@ -548,8 +569,112 @@ func targetTimeZone(request Request) string {
 	return request.Transformations.Timezone
 }
 
-func hasAggregations(request Request) bool {
-	return request.Transformations != nil && (len(request.Transformations.Keys) > 0 || len(request.Transformations.Values) > 0)
+func aggregationsFromTransformations(transformations *Transformations) *domain.Aggregations {
+	if transformations == nil || (len(transformations.Keys) == 0 && len(transformations.Values) == 0) {
+		return nil
+	}
+
+	aggregations := domain.Aggregations{
+		GroupBy:     make([]domain.AggregationColumn, 0, len(transformations.Keys)),
+		Expressions: make([]domain.AggregationColumn, 0, len(transformations.Values)),
+	}
+	for _, key := range transformations.Keys {
+		parts := strings.SplitN(key, "=", 2)
+		expression := normalizeAggregationExpression(parts[0])
+		alias := expression
+		if len(parts) == 2 {
+			alias = strings.TrimSpace(parts[1])
+		}
+		aggregations.GroupBy = append(aggregations.GroupBy, domain.AggregationColumn{
+			Expression: expression,
+			Alias:      alias,
+		})
+	}
+	for _, pair := range transformations.Values {
+		if len(pair) != 2 {
+			continue
+		}
+		aggregations.Expressions = append(aggregations.Expressions, domain.AggregationColumn{
+			Expression: strings.TrimSpace(pair[0]),
+			Alias:      strings.TrimSpace(pair[1]),
+		})
+	}
+	return &aggregations
+}
+
+func normalizeAggregationExpression(expression string) string {
+	expression = strings.TrimSpace(expression)
+	lower := strings.ToLower(expression)
+	var builder strings.Builder
+	for i := 0; i < len(expression); {
+		if strings.HasPrefix(lower[i:], "delivery") && !strings.HasPrefix(lower[i:], "deliverystart") {
+			builder.WriteString("DeliveryStart")
+			i += len("delivery")
+			continue
+		}
+		builder.WriteByte(expression[i])
+		i++
+	}
+	return builder.String()
+}
+
+func aggregatedColumnNames(aggregations *domain.Aggregations, isHyperscale bool, projectionFilter []string) []string {
+	if aggregations == nil {
+		return nil
+	}
+	requested := requestedAggregationColumns(projectionFilter)
+	columns := []string{"Identifier", "ReferenceTime", "DeliveryStart", "DeliveryEnd", "RelativeDeliveryPeriod"}
+	if !isHyperscale {
+		columns = append(columns, "LegacyDeliveryBucketNumber")
+	}
+	for _, group := range aggregations.GroupBy {
+		columns = appendAggregatedColumn(columns, requested, group.Alias)
+	}
+	for _, expression := range aggregations.Expressions {
+		columns = appendAggregatedColumn(columns, requested, expression.Alias)
+	}
+	if len(requested) == 0 {
+		return columns
+	}
+	filtered := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if _, ok := requested[strings.ToLower(column)]; ok {
+			filtered = append(filtered, column)
+		}
+	}
+	return filtered
+}
+
+func requestedAggregationColumns(columns []string) map[string]struct{} {
+	if len(columns) == 0 {
+		return nil
+	}
+	requested := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		column = strings.ToLower(strings.TrimSpace(column))
+		if column != "" {
+			requested[column] = struct{}{}
+		}
+	}
+	return requested
+}
+
+func appendAggregatedColumn(columns []string, requested map[string]struct{}, column string) []string {
+	column = strings.TrimSpace(column)
+	if column == "" {
+		return columns
+	}
+	if len(requested) > 0 {
+		if _, ok := requested[strings.ToLower(column)]; !ok {
+			return columns
+		}
+	}
+	for _, existing := range columns {
+		if strings.EqualFold(existing, column) {
+			return columns
+		}
+	}
+	return append(columns, column)
 }
 
 func selectFetchingStrategy(command Command) Command {
@@ -576,6 +701,9 @@ func fetchingSource(command Command) SourceKind {
 
 func shouldUseCMDPStrategy(command Command) bool {
 	if command.HasShape || command.HasAggregations {
+		return true
+	}
+	if hasRankOverFilter(command.Filters.Nodes) {
 		return true
 	}
 	if len(command.Mappings) == 0 {

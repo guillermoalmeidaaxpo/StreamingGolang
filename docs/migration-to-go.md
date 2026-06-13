@@ -483,12 +483,27 @@ Current behavior:
 - requested columns restrict value columns
 - reference-time interval filters become SQL bounds
 - quote-index split range adds indexed column predicates
+- rank-over filters are executed with a CMDP-only derived query using
+  `RANK() OVER (PARTITION BY ... ORDER BY ...)`
+- rank-over filtering follows C# bound semantics:
+  - no third argument -> `rank = 1`
+  - single value -> `rank = value`
+  - `[n,last]` -> `rank >= n`
+  - `[n,m]` -> `rank >= n AND rank <= m`
 - order columns come from mapping priority when present
+
+Rank-over validation follows the C# API:
+
+- not allowed with aggregations
+- not allowed for timeseries
+- not allowed for Cassandra, Hyperscale, or Mesap-hosted ids
+- partition columns must be mapped key columns
+- `Identifier/MdoId` and `RelativeDeliveryPeriod` are not allowed in rank-over
+  partition/order columns
 
 CMDP still needs careful parity testing for:
 
 - `latest(...)` CTE behavior
-- rank-over filters
 - aggregation SQL
 - shape filters
 - delivery/RDP filter combinations
@@ -536,6 +551,11 @@ Important C# projection parity:
   projectable columns
 - JSON endpoints drop `Identifier/MdoId`
 - CSV endpoints keep `Identifier/MdoId`
+- Aggregation CSV headers are generated from aggregation output columns rather
+  than raw mapping columns. This preserves aliases such as `DeliveryBucket` and
+  `AveragePrice`.
+- Non-stream CSV responses now emit the unified header even when the query
+  returns zero rows, so empty aggregation results are still inspectable.
 
 ## Transformations
 
@@ -553,14 +573,87 @@ C# behavior to preserve:
 - Generic CSV defaults target timezone to `UTC` when there is no aggregation,
   no explicit target timezone, and offset is false.
 - Aggregations default target timezone to UTC when no target timezone is given.
+- Aggregation keys normalize `Delivery` to `DeliveryStart`, matching the C#
+  `AggregationExpressionHelper`.
 - JSON and streaming JSON include offsets by default.
 
 Remaining high-risk transformation areas:
 
 - nested output shape
-- aggregation group/value expressions
-- timezone bucketing
+- additional aggregation period variants beyond the currently covered SQL
+  bucket cases
 - shape-aware transformations
+
+## Aggregations
+
+Aggregation requests are now represented explicitly in the Go domain command:
+
+```text
+domain.Aggregations
+  GroupBy     []AggregationColumn
+  Expressions []AggregationColumn
+```
+
+The planner builds this model from `transformations.keys` and
+`transformations.values`, following C# behavior:
+
+- both `keys` and `values` must be supplied together
+- only one aggregation key is allowed
+- `Aggregate(Delivery, <period>)` is normalized to
+  `Aggregate(DeliveryStart, <period>)`
+- when no target timezone is supplied, aggregation bucketing defaults to `UTC`
+- aggregation projection columns are generated like C#
+  `AggregationSqlBuilder.GetAggregatedColumnNames`
+
+Generated aggregation output columns start with:
+
+```text
+Identifier
+ReferenceTime
+DeliveryStart
+DeliveryEnd
+RelativeDeliveryPeriod
+LegacyDeliveryBucketNumber   # CMDP only
+```
+
+Then group aliases and value aliases are appended, respecting requested
+projection columns.
+
+CMDP aggregation SQL now uses the C# shape:
+
+- literal MDO id as `Identifier`
+- `MIN(ReferenceTime)` unless reference time itself is bucketed
+- `MIN(DeliveryStart)`
+- `MAX(DeliveryEnd)`
+- `NULL AS RelativeDeliveryPeriod`
+- `NULL AS LegacyDeliveryBucketNumber`
+- SQL Server `DATEADD/DATEDIFF` bucket expressions for aggregate keys
+- aggregate values such as `AVG(...)`, `SUM(...)`, `MIN(...)`, `MAX(...)`,
+  and `COUNT(...)`
+- `GROUP BY` and `ORDER BY` include reference time and group expressions,
+  following `AggregationSqlBuilder`
+
+Hyperscale aggregation SQL uses the same output shape but:
+
+- excludes `LegacyDeliveryBucketNumber`
+- reads values from JSON payload columns such as `CurveValue`
+- casts JSON values based on mapping datatype before aggregation
+- keeps the regular Hyperscale latest-version / TVF source selection rules
+
+Validation now rejects:
+
+- aggregations outside curves
+- aggregation value columns that are unmapped
+- aggregation value columns that are key columns
+- duplicate aggregation aliases
+- rank-over filters combined with aggregations
+
+Regression coverage currently compiles tests for:
+
+- planner aggregation metadata and generated columns
+- CMDP aggregation query shape
+- Hyperscale aggregation query shape
+- CSV aggregation header selection
 
 ## Error Handling And Logging
 
@@ -680,6 +773,8 @@ Implemented:
 - Cassandra quote-index planning.
 - CMDP SQL builder.
 - Hyperscale SQL builder with latest-reference-time and projection parity rules.
+- Aggregation command model, validation, CMDP SQL, Hyperscale SQL, and CSV
+  header generation.
 - Cassandra query builder and repository.
 - CSV/generic/lite endpoints.
 - JSON, streaming JSON, and NDJSON transactional endpoints.
@@ -690,10 +785,10 @@ Implemented:
 
 Known gaps / still needs parity work:
 
-- Full aggregation SQL parity across CMDP, Hyperscale, and CSV headers.
+- Aggregation end-to-end parity still needs live CMDP/Hyperscale proof with
+  representative ids and expected C# result sets.
 - Full shape filter parity.
 - Full `latest(...)` CTE parity for Hyperscale and CMDP.
-- Full rank-over filter execution.
 - Mesap endpoint/data-source parity.
 - Data trace/migration endpoints if required by production consumers.
 - Application Insights exporter integration if required.
@@ -725,8 +820,11 @@ MDS.DPS.TransactionalData.Outbound.Domain\Filtering\FilterProvider.cs
 MDS.DPS.TransactionalData.Outbound.Domain\Extensions\FilterSetExtensions.cs
 MDS.DPS.TransactionalData.Outbound.Domain\Extensions\CmdpQuoteIndexFilterExtensions.cs
 MDS.DPS.TransactionalData.Outbound.Domain\Extensions\RelativeDeliveryPeriodFilterBuilder.cs
+MDS.DPS.TransactionalData.Outbound.Domain\Extensions\RankOverClauseBuilder.cs
+MDS.DPS.TransactionalData.Outbound.Domain\Entities\Filters\PartitionOverFilter.cs
 MDS.DPS.TransactionalData.Outbound.Domain\Entities\MappingSet.cs
 MDS.DPS.TransactionalData.Outbound.Domain\Entities\MdoMapping.cs
+MDS.DPS.TransactionalData.Outbound.API\Validators\RankFilterValidator.cs
 MDS.DPS.TransactionalData.Outbound.Service\Services\Orchestrator\MdoDataFetchingStrategyParser.cs
 MDS.DPS.TransactionalData.Outbound.Service\Services\Orchestrator\TransactionalDataCommandParser.cs
 MDS.DPS.TransactionalData.Outbound.Service\Services\Orchestrator\DataFetchingCommand.cs

@@ -13,6 +13,7 @@ type Command struct {
 	FilterTimeZone      string
 	TargetTimeZone      string
 	HasAggregations     bool
+	Aggregations        *Aggregations
 	HasShape            bool
 	LatestReferenceTime bool
 	Filters             FilterSet
@@ -20,6 +21,16 @@ type Command struct {
 	Source              SourceKind
 	QuoteIndices        []int
 	IndexRange          *IndexRange
+}
+
+type Aggregations struct {
+	GroupBy     []AggregationColumn
+	Expressions []AggregationColumn
+}
+
+type AggregationColumn struct {
+	Expression string
+	Alias      string
 }
 
 type IndexRange struct {

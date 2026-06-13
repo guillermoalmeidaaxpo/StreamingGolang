@@ -109,6 +109,160 @@ func TestCMDPQueryBuilderRejectsUnsupportedLatestFilters(t *testing.T) {
 	}
 }
 
+func TestCMDPQueryBuilderBuildsRankOverStatementLikeCSharp(t *testing.T) {
+	queryBuilder := NewCMDPQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory: domain.Curves,
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: ">=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2024-12-09T00:00:00",
+				},
+			},
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: "<",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2024-12-16T00:00:00",
+				},
+			},
+			domain.RankOverFilter{
+				PartitionBy: []string{"DeliveryStart"},
+				OrderBy:     []domain.SortExpression{{Field: "ReferenceTime", Direction: "desc"}},
+				Bounds:      []domain.RankOverBound{{Start: "3", End: "4"}},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCMDP,
+			ViewName:     "ACCESS.Data_PriceModelled",
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "QuoteTime", IsKey: true, IsProjectable: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "DeliveryStart", SourceName: "AdjustedDeliveryStartDate", IsKey: true, IsProjectable: true},
+				{MDSName: "SettlementPrice", SourceName: "settlement price", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "SELECT [d].[ReferenceTime], [d].[DeliveryStart], [d].[SettlementPrice] FROM (SELECT [d].[QuoteTime] AS [ReferenceTime], [d].[AdjustedDeliveryStartDate] AS [DeliveryStart], [d].[settlement price] AS [SettlementPrice], RANK() OVER")
+	assertContains(t, statement, "PARTITION BY [d].[AdjustedDeliveryStartDate] ORDER BY [d].[QuoteTime] DESC")
+	assertContains(t, statement, "FROM [ACCESS].[Data_PriceModelled] AS [d] WHERE [d].[TimeSeries_FID] = @id")
+	assertContains(t, statement, "[d].[QuoteTime] >= @p0")
+	assertContains(t, statement, "[d].[QuoteTime] < @p1")
+	assertContains(t, statement, "WHERE [d].[rank] >= 3 AND [d].[rank] <= 4")
+	assertContains(t, statement, "ORDER BY [d].[ReferenceTime]")
+	assertNotContains(t, statement, "rank] AS")
+}
+
+func TestCMDPQueryBuilderBuildsRankOverLastBound(t *testing.T) {
+	queryBuilder := NewCMDPQueryBuilder()
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory: domain.Curves,
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.RankOverFilter{
+				PartitionBy: []string{"DeliveryStart"},
+				OrderBy:     []domain.SortExpression{{Field: "ReferenceTime", Direction: "asc"}},
+				Bounds:      []domain.RankOverBound{{Start: "3", End: "last"}},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCMDP,
+			ViewName:     "ACCESS.Data_PriceModelled",
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "QuoteTime", IsKey: true, IsProjectable: true},
+				{MDSName: "DeliveryStart", SourceName: "AdjustedDeliveryStartDate", IsKey: true, IsProjectable: true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+
+	assertContains(t, queries[0].Statement, "WHERE [d].[rank] >= 3")
+	assertNotContains(t, queries[0].Statement, "[d].[rank] <= last")
+}
+
+func TestCMDPQueryBuilderBuildsAggregationStatementLikeCSharp(t *testing.T) {
+	queryBuilder := NewCMDPQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:    domain.Curves,
+		TargetTimeZone:  "UTC",
+		HasAggregations: true,
+		Aggregations: &domain.Aggregations{
+			GroupBy: []domain.AggregationColumn{
+				{Expression: "Aggregate(DeliveryStart, PT1H)", Alias: "DeliveryBucket"},
+			},
+			Expressions: []domain.AggregationColumn{
+				{Expression: "AVG(SettlementPrice)", Alias: "AveragePrice"},
+			},
+		},
+		Columns: []string{"Identifier", "ReferenceTime", "DeliveryStart", "DeliveryEnd", "RelativeDeliveryPeriod", "LegacyDeliveryBucketNumber", "DeliveryBucket", "AveragePrice"},
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: ">=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValuePointInTime,
+					Raw:  "2024-04-26T00:00:00",
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCMDP,
+			ViewName:     "ACCESS.Data_PriceModelled",
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "QuoteTime", IsKey: true, IsProjectable: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "DeliveryStart", SourceName: "AdjustedDeliveryStartDate", IsKey: true, IsProjectable: true},
+				{MDSName: "DeliveryEnd", SourceName: "AdjustedDeliveryEndDate", IsKey: true, IsProjectable: true},
+				{MDSName: "SettlementPrice", SourceName: "settlement price", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "536013751 AS [Identifier]")
+	assertContains(t, statement, "MIN([d].[QuoteTime]) AS [ReferenceTime]")
+	assertContains(t, statement, "MIN([d].[AdjustedDeliveryStartDate]) AS [DeliveryStart]")
+	assertContains(t, statement, "MAX([d].[AdjustedDeliveryEndDate]) AS [DeliveryEnd]")
+	assertContains(t, statement, "NULL AS [RelativeDeliveryPeriod]")
+	assertContains(t, statement, "NULL AS [LegacyDeliveryBucketNumber]")
+	assertContains(t, statement, "CAST(DATEADD(HOUR, (DATEDIFF(HOUR, '20000101', [d].[AdjustedDeliveryStartDate]) / 1) * 1, '20000101') AS datetimeoffset) AS [DeliveryBucket]")
+	assertContains(t, statement, "AVG([d].[settlement price]) AS [AveragePrice]")
+	assertContains(t, statement, "FROM [ACCESS].[Data_PriceModelled] AS [d]")
+	assertContains(t, statement, "WHERE [d].[TimeSeries_FID] = @id AND [d].[QuoteTime] >= @p0")
+	assertContains(t, statement, "GROUP BY [d].[QuoteTime], CAST(DATEADD(HOUR, (DATEDIFF(HOUR, '20000101', [d].[AdjustedDeliveryStartDate]) / 1) * 1, '20000101') AS datetimeoffset)")
+	assertContains(t, statement, "ORDER BY [d].[QuoteTime], CAST(DATEADD(HOUR, (DATEDIFF(HOUR, '20000101', [d].[AdjustedDeliveryStartDate]) / 1) * 1, '20000101') AS datetimeoffset)")
+}
+
 func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	queryBuilder := NewHyperscaleQueryBuilder()
 	keyOrder := 1
@@ -158,6 +312,61 @@ func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	if queries[0].Parameters["id"] != int64(488109751) {
 		t.Fatalf("id parameter = %#v", queries[0].Parameters["id"])
 	}
+}
+
+func TestHyperscaleQueryBuilderBuildsAggregationStatementLikeCSharp(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:        domain.Curves,
+		IncludeIdentifier:   true,
+		TargetTimeZone:      "UTC",
+		HasAggregations:     true,
+		LatestReferenceTime: false,
+		Aggregations: &domain.Aggregations{
+			GroupBy: []domain.AggregationColumn{
+				{Expression: "Aggregate(DeliveryStart, PT1H)", Alias: "DeliveryBucket"},
+			},
+			Expressions: []domain.AggregationColumn{
+				{Expression: "AVG(Value)", Alias: "AverageValue"},
+			},
+		},
+		Columns: []string{"Identifier", "ReferenceTime", "DeliveryStart", "DeliveryEnd", "RelativeDeliveryPeriod", "DeliveryBucket", "AverageValue"},
+		Mappings: []domain.Mapping{{
+			ID:           488109751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceHyperscale,
+			HyperscaleID: ptrIdentifier(488109751),
+			Columns: []domain.ColumnMapping{
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+				{MDSName: "DeliveryStart", SourceName: "DeliveryStart", IsKey: true},
+				{MDSName: "DeliveryEnd", SourceName: "DeliveryEnd", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "488109751 AS [Identifier]")
+	assertContains(t, statement, "MIN([d].[ReferenceTime]) AS [ReferenceTime]")
+	assertContains(t, statement, "MIN([d].[DeliveryStart]) AS [DeliveryStart]")
+	assertContains(t, statement, "MAX([d].[DeliveryEnd]) AS [DeliveryEnd]")
+	assertContains(t, statement, "NULL AS [RelativeDeliveryPeriod]")
+	assertNotContains(t, statement, "LegacyDeliveryBucketNumber")
+	assertContains(t, statement, `AVG(CAST(JSON_VALUE([d].[CurveValue], '$."Value"') AS FLOAT)) AS [AverageValue]`)
+	assertContains(t, statement, "FROM [Api].[VI_CurveLatestVersion] AS [d]")
+	assertContains(t, statement, "[d].[MdoId] = @id")
+	assertContains(t, statement, "[d].[Deleted] = 0")
+	assertContains(t, statement, "GROUP BY [d].[ReferenceTime], CAST(DATEADD(HOUR, (DATEDIFF(HOUR, '20000101', [d].[DeliveryStart]) / 1) * 1, '20000101') AS datetimeoffset)")
 }
 
 func TestHyperscaleQueryBuilderIncludesIdentifierForCSV(t *testing.T) {
@@ -273,6 +482,10 @@ func TestHyperscaleQueryBuilderUsesCreatedOnLatestReferenceTimeTVF(t *testing.T)
 	if queries[0].Parameters["MdoId"] != int64(504078501) {
 		t.Fatalf("MdoId parameter = %#v", queries[0].Parameters["MdoId"])
 	}
+}
+
+func ptrIdentifier(id domain.Identifier) *domain.Identifier {
+	return &id
 }
 
 func assertContains(t *testing.T, text, substring string) {

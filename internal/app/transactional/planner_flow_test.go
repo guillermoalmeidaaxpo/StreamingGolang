@@ -84,3 +84,65 @@ func TestGenericPlannerUsesMappingCategories(t *testing.T) {
 		t.Fatalf("second query category = %q, want timeseries", got)
 	}
 }
+
+func TestPlannerBuildsAggregationCommandColumnsLikeCSharp(t *testing.T) {
+	planner := NewPlanner(
+		WithMappingResolver(fixedMappingResolver{mappings: []domain.Mapping{{
+			ID:           10,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCMDP,
+			ViewName:     "CurveView",
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "QuoteTime", IsKey: true},
+				{MDSName: "DeliveryStart", SourceName: "DeliveryStart", IsKey: true},
+				{MDSName: "DeliveryEnd", SourceName: "DeliveryEnd", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", IsProjectable: true},
+			},
+		}}}),
+		WithQueryBuilder(PlaceholderQueryBuilder{}),
+	)
+
+	plan, err := planner.BuildPlan(context.Background(), RequestContext{
+		DataCategory: domain.Curves,
+		Stage:        "development",
+		Mode:         ModeCSV,
+	}, []Request{{
+		IDs: []domain.Identifier{10},
+		Transformations: &Transformations{
+			Keys:   []string{"Aggregate(Delivery, PT1H)=DeliveryBucket"},
+			Values: [][]string{{"AVG(Value)", "AverageValue"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("build plan failed: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("steps = %d, want 1", len(plan.Steps))
+	}
+	command := plan.Steps[0].Command
+	if command.Aggregations == nil {
+		t.Fatal("expected aggregation metadata")
+	}
+	if got := command.Aggregations.GroupBy[0].Expression; got != "Aggregate(DeliveryStart, PT1H)" {
+		t.Fatalf("group expression = %q", got)
+	}
+	if got := command.TargetTimeZone; got != "UTC" {
+		t.Fatalf("target timezone = %q, want UTC", got)
+	}
+	wantColumns := []string{"Identifier", "ReferenceTime", "DeliveryStart", "DeliveryEnd", "RelativeDeliveryPeriod", "LegacyDeliveryBucketNumber", "DeliveryBucket", "AverageValue"}
+	if !equalStringSlices(command.Columns, wantColumns) {
+		t.Fatalf("columns = %#v, want %#v", command.Columns, wantColumns)
+	}
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -42,7 +42,7 @@ func (CMDPQueryBuilder) BuildQueries(_ context.Context, command domain.Command) 
 			continue
 		}
 
-		statement, parameters, err := buildCMDPStatement(mapping, command.Filters, command.IndexRange, command.Columns)
+		statement, parameters, err := buildCMDPStatement(mapping, command.Filters, command.IndexRange, command.Columns, command.Aggregations, command.TargetTimeZone)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +75,7 @@ func (HyperscaleQueryBuilder) BuildQueries(_ context.Context, command domain.Com
 			continue
 		}
 
-		statement, parameters, err := buildHyperscaleStatement(mapping, command.Filters, command.Columns, command.VersionAsOf, command.IncludeDeleted, command.IncludeIdentifier, command.LatestReferenceTime)
+		statement, parameters, err := buildHyperscaleStatement(mapping, command.Filters, command.Columns, command.VersionAsOf, command.IncludeDeleted, command.IncludeIdentifier, command.LatestReferenceTime, command.Aggregations, command.TargetTimeZone)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +103,7 @@ func dataCategoryForQuery(commandCategory domain.DataCategory, mapping domain.Ma
 	return commandCategory
 }
 
-func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexRange *domain.IndexRange, requestedColumns []string) (string, map[string]any, error) {
+func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexRange *domain.IndexRange, requestedColumns []string, aggregations *domain.Aggregations, targetTimeZone string) (string, map[string]any, error) {
 	if strings.TrimSpace(mapping.ViewName) == "" {
 		return "", nil, apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no CMDP view name", mapping.ID))
 	}
@@ -129,6 +129,13 @@ func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexR
 		)
 	}
 
+	if rankOver, ok := singleRankOverFilter(filters.Nodes); ok {
+		return builder.rankOverStatement(mapping, rankOver, requestedColumns, where)
+	}
+	if aggregations != nil {
+		return builder.aggregationStatement(mapping, aggregations, requestedColumns, targetTimeZone, quoteTable(mapping.ViewName), where, false)
+	}
+
 	statement := fmt.Sprintf("SELECT %s FROM %s AS [d] WHERE %s",
 		strings.Join(selectColumns(mapping.Columns, requestedColumns), ", "),
 		quoteTable(mapping.ViewName),
@@ -141,7 +148,11 @@ func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexR
 	return statement, builder.parameters, nil
 }
 
-func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, requestedColumns []string, versionAsOf *time.Time, includeDeleted bool, includeIdentifier bool, latestReferenceTime bool) (string, map[string]any, error) {
+func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, requestedColumns []string, versionAsOf *time.Time, includeDeleted bool, includeIdentifier bool, latestReferenceTime bool, aggregations *domain.Aggregations, targetTimeZone string) (string, map[string]any, error) {
+	if hasRankOverFilters(filters.Nodes) {
+		return "", nil, apperr.New(apperr.Invalid, "rankover filters are only supported for CMDP-hosted curves and surfaces")
+	}
+
 	viewName, err := hyperscaleViewName(mapping, requestedColumns, versionAsOf, latestReferenceTime)
 	if err != nil {
 		return "", nil, err
@@ -178,6 +189,10 @@ func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, 
 	}
 	where = append(where, filterPredicates...)
 
+	if aggregations != nil {
+		return builder.aggregationStatement(mapping, aggregations, requestedColumns, targetTimeZone, from, where, true)
+	}
+
 	statement := fmt.Sprintf("SELECT %s FROM %s AS [d]",
 		strings.Join(hyperscaleSelectColumns(mapping, requestedColumns, valueColumn, includeIdentifier, latestReferenceTime), ", "),
 		from,
@@ -212,10 +227,412 @@ func (b *sqlBuilder) filterPredicates(nodes []domain.FilterNode) ([]string, erro
 				predicates = append(predicates, predicate)
 			}
 		case domain.RankOverFilter:
-			return nil, apperr.New(apperr.Invalid, "rankover filters are not supported by the CMDP SQL builder yet")
+			continue
 		}
 	}
 	return predicates, nil
+}
+
+func (b *sqlBuilder) rankOverStatement(mapping domain.Mapping, filter domain.RankOverFilter, requestedColumns []string, where []string) (string, map[string]any, error) {
+	partitionBy, err := b.rankPartitionByClause(filter)
+	if err != nil {
+		return "", nil, err
+	}
+	orderBy, err := b.rankOrderByClause(filter)
+	if err != nil {
+		return "", nil, err
+	}
+	rankPredicate, err := rankOverPredicate(filter)
+	if err != nil {
+		return "", nil, err
+	}
+
+	columns := cmdpSelectColumnSpecs(mapping.Columns, requestedColumns)
+	innerSelect := make([]string, 0, len(columns))
+	outerSelect := make([]string, 0, len(columns))
+	for _, column := range columns {
+		innerSelect = append(innerSelect, column.Inner)
+		outerSelect = append(outerSelect, column.Outer)
+	}
+	if len(innerSelect) == 0 {
+		innerSelect = []string{"[d].*"}
+		outerSelect = []string{"[d].*"}
+	}
+
+	statement := fmt.Sprintf("SELECT %s FROM (SELECT %s, RANK() OVER (PARTITION BY %s ORDER BY %s) AS [rank] FROM %s AS [d] WHERE %s) AS [d] WHERE %s",
+		strings.Join(outerSelect, ", "),
+		strings.Join(innerSelect, ", "),
+		partitionBy,
+		orderBy,
+		quoteTable(mapping.ViewName),
+		strings.Join(where, " AND "),
+		rankPredicate,
+	)
+	if order := outerOrderColumns(mapping.Columns); len(order) > 0 {
+		statement += " ORDER BY " + strings.Join(order, ", ")
+	}
+	return statement, b.parameters, nil
+}
+
+func (b *sqlBuilder) aggregationStatement(mapping domain.Mapping, aggregations *domain.Aggregations, requestedColumns []string, targetTimeZone string, from string, where []string, isHyperscale bool) (string, map[string]any, error) {
+	selectColumns, err := b.aggregationSelectColumns(mapping, aggregations, requestedColumns, targetTimeZone, isHyperscale)
+	if err != nil {
+		return "", nil, err
+	}
+	groupBy, err := b.aggregationGroupByColumns(aggregations, targetTimeZone)
+	if err != nil {
+		return "", nil, err
+	}
+	orderBy, err := b.aggregationOrderByColumns(aggregations, targetTimeZone)
+	if err != nil {
+		return "", nil, err
+	}
+
+	statement := fmt.Sprintf("SELECT %s FROM %s AS [d]", strings.Join(selectColumns, ", "), from)
+	if len(where) > 0 {
+		statement += " WHERE " + strings.Join(where, " AND ")
+	}
+	if len(groupBy) > 0 {
+		statement += " GROUP BY " + strings.Join(groupBy, ", ")
+	}
+	if len(orderBy) > 0 {
+		statement += " ORDER BY " + strings.Join(orderBy, ", ")
+	}
+	return statement, b.parameters, nil
+}
+
+func (b *sqlBuilder) aggregationSelectColumns(mapping domain.Mapping, aggregations *domain.Aggregations, requestedColumns []string, targetTimeZone string, isHyperscale bool) ([]string, error) {
+	requested := requestedColumnSet(requestedColumns)
+	columns := make([]string, 0)
+	if includeAggregationColumn(requested, "Identifier") {
+		columns = append(columns, fmt.Sprintf("%d AS [Identifier]", mapping.ID))
+	}
+
+	referenceTimeGrouped := false
+	for _, group := range aggregations.GroupBy {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(group.Expression)), "aggregate(") && strings.EqualFold(aggregateBucketColumn(group.Expression), "ReferenceTime") {
+			expression, err := b.aggregationGroupExpression(group.Expression, targetTimeZone)
+			if err != nil {
+				return nil, err
+			}
+			if includeAggregationColumn(requested, "ReferenceTime") {
+				columns = append(columns, expression+" AS [ReferenceTime]")
+			}
+			referenceTimeGrouped = true
+			break
+		}
+	}
+	if !referenceTimeGrouped && includeAggregationColumn(requested, "ReferenceTime") {
+		columns = append(columns, fmt.Sprintf("MIN(%s) AS [ReferenceTime]", b.requiredColumnExpression("ReferenceTime")))
+	}
+	if includeAggregationColumn(requested, "DeliveryStart") {
+		columns = append(columns, fmt.Sprintf("MIN(%s) AS [DeliveryStart]", b.requiredColumnExpression("DeliveryStart")))
+	}
+	if includeAggregationColumn(requested, "DeliveryEnd") {
+		columns = append(columns, fmt.Sprintf("MAX(%s) AS [DeliveryEnd]", b.requiredColumnExpression("DeliveryEnd")))
+	}
+	if includeAggregationColumn(requested, "RelativeDeliveryPeriod") {
+		columns = append(columns, "NULL AS [RelativeDeliveryPeriod]")
+	}
+	if !isHyperscale && includeAggregationColumn(requested, "LegacyDeliveryBucketNumber") {
+		columns = append(columns, "NULL AS [LegacyDeliveryBucketNumber]")
+	}
+
+	for _, group := range aggregations.GroupBy {
+		trimmed := strings.TrimSpace(group.Expression)
+		if strings.HasPrefix(strings.ToLower(trimmed), "aggregate(") {
+			if !includeAggregationColumn(requested, group.Alias) || strings.EqualFold(group.Alias, "ReferenceTime") {
+				continue
+			}
+			expression, err := b.aggregationGroupExpression(trimmed, targetTimeZone)
+			if err != nil {
+				return nil, err
+			}
+			columns = append(columns, expression+" AS "+quoteIdentifier(group.Alias))
+			continue
+		}
+		if includeAggregationColumn(requested, group.Alias) {
+			column, ok := b.columnByMDSName(trimmed)
+			if !ok {
+				return nil, apperr.New(apperr.Invalid, fmt.Sprintf("aggregation group column %q is not mapped", trimmed))
+			}
+			columns = append(columns, b.columnExpression(column)+" AS "+quoteIdentifier(group.Alias))
+		}
+	}
+
+	for _, aggregation := range aggregations.Expressions {
+		if !includeAggregationColumn(requested, aggregation.Alias) {
+			continue
+		}
+		expression, err := b.aggregationValueExpression(aggregation.Expression)
+		if err != nil {
+			return nil, err
+		}
+		columns = append(columns, expression+" AS "+quoteIdentifier(aggregation.Alias))
+	}
+
+	if len(columns) == 0 {
+		return nil, apperr.New(apperr.Invalid, "no aggregation columns selected")
+	}
+	return columns, nil
+}
+
+func (b *sqlBuilder) aggregationGroupByColumns(aggregations *domain.Aggregations, targetTimeZone string) ([]string, error) {
+	columns := make([]string, 0)
+	if referenceTime, ok := b.columnByMDSName("ReferenceTime"); ok {
+		columns = append(columns, b.columnExpression(referenceTime))
+	}
+	for _, group := range aggregations.GroupBy {
+		trimmed := strings.TrimSpace(group.Expression)
+		if strings.HasPrefix(strings.ToLower(trimmed), "aggregate(") {
+			expression, err := b.aggregationGroupExpression(trimmed, targetTimeZone)
+			if err != nil {
+				return nil, err
+			}
+			columns = append(columns, expression)
+			continue
+		}
+		column, ok := b.columnByMDSName(trimmed)
+		if !ok {
+			return nil, apperr.New(apperr.Invalid, fmt.Sprintf("aggregation group column %q is not mapped", trimmed))
+		}
+		columns = append(columns, b.columnExpression(column))
+	}
+	return uniqueSQLParts(columns), nil
+}
+
+func (b *sqlBuilder) aggregationOrderByColumns(aggregations *domain.Aggregations, targetTimeZone string) ([]string, error) {
+	columns := make([]string, 0)
+	if referenceTime, ok := b.columnByMDSName("ReferenceTime"); ok {
+		columns = append(columns, b.columnExpression(referenceTime))
+	}
+	for _, group := range aggregations.GroupBy {
+		trimmed := strings.TrimSpace(group.Expression)
+		if strings.HasPrefix(strings.ToLower(trimmed), "aggregate(") {
+			expression, err := b.aggregationGroupExpression(trimmed, targetTimeZone)
+			if err != nil {
+				return nil, err
+			}
+			columns = append(columns, expression)
+			continue
+		}
+		column, ok := b.columnByMDSName(trimmed)
+		if !ok {
+			return nil, apperr.New(apperr.Invalid, fmt.Sprintf("aggregation group column %q is not mapped", trimmed))
+		}
+		columns = append(columns, b.columnExpression(column))
+	}
+	return uniqueSQLParts(columns), nil
+}
+
+func (b *sqlBuilder) aggregationGroupExpression(expression string, targetTimeZone string) (string, error) {
+	columnName, period, ok := parseAggregateBucket(expression)
+	if !ok {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("invalid aggregation key expression %q", expression))
+	}
+	column, ok := b.columnByMDSName(columnName)
+	if !ok {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("aggregation key column %q is not mapped", columnName))
+	}
+	datePart, interval, anchor, err := sqlPeriodBucket(period)
+	if err != nil {
+		return "", err
+	}
+	columnExpression := b.columnExpression(column)
+	if targetTimeZone = strings.TrimSpace(targetTimeZone); targetTimeZone != "" && !strings.EqualFold(targetTimeZone, "UTC") {
+		columnExpression = fmt.Sprintf("CAST(%s AT TIME ZONE '%s' AS datetimeoffset)", columnExpression, sqlServerTimeZone(targetTimeZone))
+	}
+	return fmt.Sprintf("CAST(DATEADD(%s, (DATEDIFF(%s, '%s', %s) / %d) * %d, '%s') AS datetimeoffset)", datePart, datePart, anchor, columnExpression, interval, interval, anchor), nil
+}
+
+func (b *sqlBuilder) aggregationValueExpression(expression string) (string, error) {
+	functionName, columnName, ok := parseAggregationFunction(expression)
+	if !ok {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("invalid aggregation expression %q", expression))
+	}
+	if strings.EqualFold(columnName, "*") {
+		if !strings.EqualFold(functionName, "COUNT") {
+			return "", apperr.New(apperr.Invalid, fmt.Sprintf("invalid aggregation expression %q", expression))
+		}
+		return "COUNT(*)", nil
+	}
+	column, ok := b.columnByMDSName(columnName)
+	if !ok {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("aggregation value column %q is not mapped", columnName))
+	}
+	return fmt.Sprintf("%s(%s)", strings.ToUpper(functionName), b.columnExpression(column)), nil
+}
+
+func (b *sqlBuilder) requiredColumnExpression(name string) string {
+	if column, ok := b.columnByMDSName(name); ok {
+		return b.columnExpression(column)
+	}
+	return qualify(name)
+}
+
+func includeAggregationColumn(requested map[string]struct{}, name string) bool {
+	if len(requested) == 0 {
+		return true
+	}
+	_, ok := requested[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+func parseAggregateBucket(expression string) (column string, period string, ok bool) {
+	name, args, ok := sqlFunctionCall(strings.TrimSpace(expression))
+	if !ok || !strings.EqualFold(name, "Aggregate") {
+		return "", "", false
+	}
+	parts := splitSQLArguments(args)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
+}
+
+func aggregateBucketColumn(expression string) string {
+	column, _, ok := parseAggregateBucket(expression)
+	if !ok {
+		return ""
+	}
+	return column
+}
+
+func parseAggregationFunction(expression string) (functionName string, column string, ok bool) {
+	name, args, ok := sqlFunctionCall(strings.TrimSpace(expression))
+	if !ok {
+		return "", "", false
+	}
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "AVG", "SUM", "MIN", "MAX", "COUNT":
+		return strings.ToUpper(strings.TrimSpace(name)), strings.TrimSpace(args), true
+	default:
+		return "", "", false
+	}
+}
+
+func sqlPeriodBucket(period string) (datePart string, interval int, anchor string, err error) {
+	period = strings.ToUpper(strings.TrimSpace(period))
+	anchor = "20000101"
+	switch {
+	case strings.HasPrefix(period, "PT") && strings.HasSuffix(period, "H"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "PT"), "H"))
+		return "HOUR", interval, anchor, invalidPeriodIfNeeded(period, interval, err)
+	case strings.HasPrefix(period, "PT") && strings.HasSuffix(period, "M"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "PT"), "M"))
+		return "MINUTE", interval, anchor, invalidPeriodIfNeeded(period, interval, err)
+	case strings.HasPrefix(period, "P") && strings.HasSuffix(period, "D"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "P"), "D"))
+		return "DAY", interval, anchor, invalidPeriodIfNeeded(period, interval, err)
+	case strings.HasPrefix(period, "P") && strings.HasSuffix(period, "W"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "P"), "W"))
+		return "WEEK", interval, "20000103", invalidPeriodIfNeeded(period, interval, err)
+	case strings.HasPrefix(period, "P") && strings.HasSuffix(period, "M"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "P"), "M"))
+		return "MONTH", interval, anchor, invalidPeriodIfNeeded(period, interval, err)
+	case strings.HasPrefix(period, "P") && strings.HasSuffix(period, "Y"):
+		interval, err = strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(period, "P"), "Y"))
+		return "YEAR", interval, anchor, invalidPeriodIfNeeded(period, interval, err)
+	default:
+		return "", 0, "", apperr.New(apperr.Invalid, fmt.Sprintf("unsupported aggregation period %q", period))
+	}
+}
+
+func invalidPeriodIfNeeded(period string, interval int, err error) error {
+	if err != nil || interval <= 0 {
+		return apperr.New(apperr.Invalid, fmt.Sprintf("unsupported aggregation period %q", period))
+	}
+	return nil
+}
+
+func sqlServerTimeZone(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "cet", "europe/zurich":
+		return "W. Europe Standard Time"
+	default:
+		return strings.ReplaceAll(name, "'", "''")
+	}
+}
+
+func uniqueSQLParts(parts []string) []string {
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		key := strings.ToLower(strings.TrimSpace(part))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, part)
+	}
+	return result
+}
+
+func (b *sqlBuilder) rankPartitionByClause(filter domain.RankOverFilter) (string, error) {
+	parts := make([]string, 0, len(filter.PartitionBy))
+	for _, field := range filter.PartitionBy {
+		column, ok := b.columnByMDSName(field)
+		if !ok {
+			return "", apperr.New(apperr.Invalid, fmt.Sprintf("rankover partition column %q is not mapped", field))
+		}
+		parts = append(parts, b.columnExpression(column))
+	}
+	if len(parts) == 0 {
+		return "", apperr.New(apperr.Invalid, "rankover requires at least one partition column")
+	}
+	return strings.Join(parts, " , "), nil
+}
+
+func (b *sqlBuilder) rankOrderByClause(filter domain.RankOverFilter) (string, error) {
+	parts := make([]string, 0, len(filter.OrderBy))
+	for _, order := range filter.OrderBy {
+		column, ok := b.columnByMDSName(order.Field)
+		if !ok {
+			return "", apperr.New(apperr.Invalid, fmt.Sprintf("rankover order column %q is not mapped", order.Field))
+		}
+		direction := strings.ToUpper(strings.TrimSpace(order.Direction))
+		switch direction {
+		case "":
+			parts = append(parts, b.columnExpression(column))
+		case "ASC", "DESC":
+			parts = append(parts, b.columnExpression(column)+" "+direction)
+		default:
+			return "", apperr.New(apperr.Invalid, fmt.Sprintf("rankover order direction %q is not supported", order.Direction))
+		}
+	}
+	if len(parts) == 0 {
+		return "", apperr.New(apperr.Invalid, "rankover requires at least one order column")
+	}
+	return strings.Join(parts, " , "), nil
+}
+
+func rankOverPredicate(filter domain.RankOverFilter) (string, error) {
+	if len(filter.Bounds) == 0 {
+		return "[d].[rank] = 1", nil
+	}
+	bound := filter.Bounds[0]
+	start := strings.TrimSpace(bound.Start)
+	if start == "" {
+		return "", apperr.New(apperr.Invalid, "rankover lower bound is required")
+	}
+	if _, err := strconv.Atoi(start); err != nil {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("rankover lower bound %q is invalid", start))
+	}
+
+	end := strings.TrimSpace(bound.End)
+	if end == "" {
+		return fmt.Sprintf("[d].[rank] = %s", start), nil
+	}
+	if strings.EqualFold(end, "last") {
+		return fmt.Sprintf("[d].[rank] >= %s", start), nil
+	}
+	if _, err := strconv.Atoi(end); err != nil {
+		return "", apperr.New(apperr.Invalid, fmt.Sprintf("rankover upper bound %q is invalid", end))
+	}
+	return fmt.Sprintf("[d].[rank] >= %s AND [d].[rank] <= %s", start, end), nil
 }
 
 func (b *sqlBuilder) comparisonPredicate(filter domain.ComparisonFilter) (string, error) {
@@ -311,6 +728,23 @@ func (b *sqlBuilder) addParameter(name string, value any) {
 }
 
 func selectColumns(columns []domain.ColumnMapping, requestedColumns []string) []string {
+	specs := cmdpSelectColumnSpecs(columns, requestedColumns)
+	if len(specs) == 0 {
+		return []string{"[d].*"}
+	}
+	expressions := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		expressions = append(expressions, spec.Inner)
+	}
+	return expressions
+}
+
+type selectColumnSpec struct {
+	Inner string
+	Outer string
+}
+
+func cmdpSelectColumnSpecs(columns []domain.ColumnMapping, requestedColumns []string) []selectColumnSpec {
 	requested := requestedColumnSet(requestedColumns)
 	selected := make([]domain.ColumnMapping, 0, len(columns))
 	for _, column := range columns {
@@ -325,7 +759,7 @@ func selectColumns(columns []domain.ColumnMapping, requestedColumns []string) []
 		}
 	}
 	if len(selected) == 0 {
-		return []string{"[d].*"}
+		return nil
 	}
 
 	sort.SliceStable(selected, func(i, j int) bool {
@@ -338,7 +772,7 @@ func selectColumns(columns []domain.ColumnMapping, requestedColumns []string) []
 	})
 
 	seen := make(map[string]struct{}, len(selected))
-	expressions := make([]string, 0, len(selected))
+	specs := make([]selectColumnSpec, 0, len(selected))
 	for _, column := range selected {
 		key := strings.ToLower(column.SourceName)
 		if _, exists := seen[key]; exists {
@@ -346,13 +780,17 @@ func selectColumns(columns []domain.ColumnMapping, requestedColumns []string) []
 		}
 		seen[key] = struct{}{}
 
+		outputName := firstNonEmpty(column.MDSName, column.SourceName)
 		expression := qualify(column.SourceName)
-		if column.MDSName != "" && !strings.EqualFold(column.MDSName, column.SourceName) {
-			expression += " AS " + quoteIdentifier(column.MDSName)
+		if outputName != "" && !strings.EqualFold(outputName, column.SourceName) {
+			expression += " AS " + quoteIdentifier(outputName)
 		}
-		expressions = append(expressions, expression)
+		specs = append(specs, selectColumnSpec{
+			Inner: expression,
+			Outer: "[d]." + quoteIdentifier(outputName),
+		})
 	}
-	return expressions
+	return specs
 }
 
 func hyperscaleSelectColumns(mapping domain.Mapping, requestedColumns []string, valueColumn string, includeIdentifier bool, latestReferenceTime bool) []string {
@@ -562,6 +1000,62 @@ func orderColumns(columns []domain.ColumnMapping) []string {
 		order = append(order, qualify(column.SourceName))
 	}
 	return order
+}
+
+func outerOrderColumns(columns []domain.ColumnMapping) []string {
+	ordered := make([]domain.ColumnMapping, 0)
+	for _, column := range columns {
+		if strings.TrimSpace(firstNonEmpty(column.MDSName, column.SourceName)) == "" {
+			continue
+		}
+		if isIdentifierColumn(column) {
+			continue
+		}
+		if column.OrderPriority != nil || column.KeyColumnOrdering != nil {
+			ordered = append(ordered, column)
+		}
+	}
+
+	if len(ordered) == 0 {
+		for _, name := range []string{"ReferenceTime", "DeliveryStart"} {
+			for _, column := range columns {
+				if strings.EqualFold(column.MDSName, name) && strings.TrimSpace(firstNonEmpty(column.MDSName, column.SourceName)) != "" {
+					ordered = append(ordered, column)
+				}
+			}
+		}
+	}
+
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return columnSortValue(ordered[i]) < columnSortValue(ordered[j])
+	})
+
+	order := make([]string, 0, len(ordered))
+	seen := make(map[string]struct{}, len(ordered))
+	for _, column := range ordered {
+		name := firstNonEmpty(column.MDSName, column.SourceName)
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		order = append(order, "[d]."+quoteIdentifier(name))
+	}
+	return order
+}
+
+func singleRankOverFilter(nodes []domain.FilterNode) (domain.RankOverFilter, bool) {
+	for _, node := range nodes {
+		if filter, ok := node.(domain.RankOverFilter); ok {
+			return filter, true
+		}
+	}
+	return domain.RankOverFilter{}, false
+}
+
+func hasRankOverFilters(nodes []domain.FilterNode) bool {
+	_, ok := singleRankOverFilter(nodes)
+	return ok
 }
 
 func orderByMDSColumns(columns []domain.ColumnMapping) []string {
