@@ -43,9 +43,12 @@ func (b *CassandraQueryBuilder) BuildQueries(_ context.Context, command domain.C
 			return nil, apperr.New(apperr.Invalid, fmt.Sprintf("no Cassandra table mapping for %q", mapping.DataCategory))
 		}
 
-		statement, arguments, err := b.buildStatement(table, mapping, command)
+		statement, arguments, skip, err := b.buildStatement(table, mapping, command)
 		if err != nil {
 			return nil, err
+		}
+		if skip {
+			continue
 		}
 
 		queries = append(queries, domain.ExecutableQuery{
@@ -89,9 +92,9 @@ func (b *CassandraQueryBuilder) qualifiedTable(table string) string {
 	return b.keyspace + "." + table
 }
 
-func (b *CassandraQueryBuilder) buildStatement(table string, mapping domain.Mapping, command domain.Command) (string, []any, error) {
+func (b *CassandraQueryBuilder) buildStatement(table string, mapping domain.Mapping, command domain.Command) (string, []any, bool, error) {
 	if mapping.CassandraID == "" {
-		return "", nil, apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no Cassandra ID", mapping.ID))
+		return "", nil, false, apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no Cassandra ID", mapping.ID))
 	}
 
 	quoteIndices := command.QuoteIndices
@@ -107,18 +110,20 @@ func (b *CassandraQueryBuilder) buildStatement(table string, mapping domain.Mapp
 
 	deliveryCQL, deliveryArguments, noRows, err := buildDeliveryFilters(command.Filters.Nodes, cassandraTimeZone(mapping.ID), quoteIndices[0])
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if forceNoRows {
 		where = append(where, "(del_y, del_m, del_d, del_h) = (?, ?, ?, ?)")
 		arguments = append(arguments, int16(1), int8(1), int8(1), int8(0))
+	} else if noRows {
+		return "", nil, true, nil
 	} else if !noRows && deliveryCQL != "" {
 		where = append(where, deliveryCQL)
 		arguments = append(arguments, deliveryArguments...)
 	}
 
 	statement := fmt.Sprintf("SELECT %s FROM %s WHERE %s", columns, table, strings.Join(where, " AND "))
-	return statement, arguments, nil
+	return statement, arguments, false, nil
 }
 
 func cassandraProjectionColumns(columns []string) []string {

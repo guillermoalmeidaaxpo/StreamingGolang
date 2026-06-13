@@ -151,3 +151,83 @@ func TestCassandraQueryBuilderAddsRelativeDeliveryPeriodFilters(t *testing.T) {
 		t.Fatalf("RDP args = %#v, want %#v", gotSuffix, wantSuffix)
 	}
 }
+
+func TestCassandraQueryBuilderIntersectsDeliveryAndRelativeDeliveryPeriodFilters(t *testing.T) {
+	builder := NewCassandraQueryBuilder(map[string]string{"power": "hpfc"}, "ts")
+	command := domain.Command{
+		DataCategory: domain.Curves,
+		QuoteIndices: []int{20250707},
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "DeliveryStart",
+				Operator: ">=",
+				Value:    domain.FilterValue{Kind: domain.FilterValuePointInTime, Raw: "2025-07-07T03:00:00"},
+			},
+			domain.ComparisonFilter{
+				Field:    "RelativeDeliveryPeriod",
+				Operator: "<=",
+				Value:    domain.FilterValue{Kind: domain.FilterValueNumber, Raw: "5"},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           312091001,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "power:312091001",
+		}},
+	}
+
+	queries, err := builder.BuildQueries(context.Background(), command)
+	if err != nil {
+		t.Fatalf("BuildQueries returned error: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("len(queries) = %d, want 1", len(queries))
+	}
+	if !strings.Contains(queries[0].Statement, "(del_y, del_m, del_d, del_h) >= (?, ?, ?, ?)") {
+		t.Fatalf("statement missing lower delivery filter: %s", queries[0].Statement)
+	}
+	if !strings.Contains(queries[0].Statement, "(del_y, del_m, del_d, del_h) <= (?, ?, ?, ?)") {
+		t.Fatalf("statement missing upper RDP filter: %s", queries[0].Statement)
+	}
+
+	wantSuffix := []any{int16(2025), int8(7), int8(7), int8(5), int16(2025), int8(7), int8(7), int8(5)}
+	gotSuffix := queries[0].Arguments[len(queries[0].Arguments)-len(wantSuffix):]
+	if !reflect.DeepEqual(gotSuffix, wantSuffix) {
+		t.Fatalf("delivery/RDP args = %#v, want %#v", gotSuffix, wantSuffix)
+	}
+}
+
+func TestCassandraQueryBuilderSkipsQueryWhenDeliveryRDPIntersectionIsEmpty(t *testing.T) {
+	builder := NewCassandraQueryBuilder(map[string]string{"power": "hpfc"}, "ts")
+	command := domain.Command{
+		DataCategory: domain.Curves,
+		QuoteIndices: []int{20250707},
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "DeliveryStart",
+				Operator: ">=",
+				Value:    domain.FilterValue{Kind: domain.FilterValuePointInTime, Raw: "2025-07-07T10:00:00"},
+			},
+			domain.ComparisonFilter{
+				Field:    "RelativeDeliveryPeriod",
+				Operator: "<",
+				Value:    domain.FilterValue{Kind: domain.FilterValueNumber, Raw: "1"},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           312091001,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCassandra,
+			CassandraID:  "power:312091001",
+		}},
+	}
+
+	queries, err := builder.BuildQueries(context.Background(), command)
+	if err != nil {
+		t.Fatalf("BuildQueries returned error: %v", err)
+	}
+	if len(queries) != 0 {
+		t.Fatalf("len(queries) = %d, want 0", len(queries))
+	}
+}

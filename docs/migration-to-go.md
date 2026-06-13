@@ -394,10 +394,20 @@ filter timezone:
 }
 ```
 
-Delivery/RDP filters are part of the Cassandra filter processing flow. The Go
-code has an RDP calculator and Cassandra filter planning hooks, but this area
-should continue to be tested against C# scenarios because it is one of the most
-business-sensitive parts of the migration.
+Delivery/RDP filters are part of the Cassandra filter processing flow and follow
+the C# `FiltersExtensions.GenerateDeliveryFilters` behavior:
+
+- `DeliveryStart` and `DeliveryEnd` filters are converted to the Cassandra-local
+  delivery hour tuple `(del_y, del_m, del_d, del_h)`.
+- `DeliveryEnd` is shifted back by one hour for Cassandra CQL filtering, matching
+  the current C# Cassandra filter implementation.
+- `RelativeDeliveryPeriod` filters are integer hours from the quote-index local
+  midnight, using the first quote index in the Cassandra batch.
+- Delivery and RDP windows are intersected before generating CQL.
+- An empty delivery/RDP intersection skips the Cassandra query for that batch.
+
+The separate RDP calculator remains used for response enrichment semantics; it
+is not the same path as Cassandra filter narrowing.
 
 ## Hyperscale Query Rules
 
@@ -494,12 +504,12 @@ Current behavior:
 - requires quote indices when Cassandra mapping/filter logic needs them
 - logs Cassandra query execution failures with statement and context
 - streams rows through the repository pipeline
+- applies C#-compatible delivery/RDP tuple filters and skips empty
+  delivery/RDP intersections
 
 High-risk parity areas:
 
 - Cassandra quote-index generation
-- delivery filters
-- relative delivery period filters
 - split/hybrid behavior around CMDP watermark
 - Cassandra vs CMDP query shape for old reference-time data
 
@@ -684,7 +694,6 @@ Known gaps / still needs parity work:
 - Full shape filter parity.
 - Full `latest(...)` CTE parity for Hyperscale and CMDP.
 - Full rank-over filter execution.
-- More exhaustive delivery/RDP Cassandra parity tests.
 - Mesap endpoint/data-source parity.
 - Data trace/migration endpoints if required by production consumers.
 - Application Insights exporter integration if required.
@@ -728,6 +737,7 @@ MDS.DPS.TransactionalData.Outbound.Service\Services\DataFetchingStrategies\CmdpD
 MDS.DPS.TransactionalData.Outbound.Service\Services\DataFetchingStrategies\HyperScaleDataFetchingStrategy.cs
 MDS.DPS.TransactionalData.Outbound.Service\Services\DataFetchingStrategies\CassandraFilterProcessor.cs
 MDS.DPS.TransactionalData.Outbound.Service\Services\DataFetchingStrategies\CassandraFilterProcessingStrategy.cs
+MDS.DPS.TransactionalData.Outbound.Service\Services\DataFetchingStrategies\FiltersExtensions.cs
 MDS.DPS.TransactionalData.Outbound.API\Builders\CsvTransactionalDataCommandBuilder.cs
 ```
 
