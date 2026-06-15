@@ -822,6 +822,32 @@ docker run --rm -p 8080:8080 `
   outbound-api:local
 ```
 
+Run Docker image against the current development services, with authorization
+API validation disabled for local testing:
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -e OUTBOUND_ENV=development `
+  -e OUTBOUND_STAGE=development `
+  -e OUTBOUND_AUTHORIZATION_API_BASE_URL="" `
+  -e OUTBOUND_REDIS_IGNORE_ALLOWED_USERS_CHECK=true `
+  -e OUTBOUND_CMDP_SQL_DSN="Server=cmdp_db_uat;Database=CMDP;Integrated Security=SSPI;TrustServerCertificate=True;Max Pool Size=20;" `
+  -e OUTBOUND_MAPPING_SQL_DSN="Server=axso-nonprod-appl-mds-dev-sqlserver.database.windows.net;Database=axso-np-mds-dev-transactionaldataoutbound-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;" `
+  -e OUTBOUND_MDS_SQL_DSN="Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;" `
+  -e OUTBOUND_MESAP_MAPPING_SQL_DSN="Server=axso-nonprod-appl-mds-lab-hyperscale-sqlserver.database.windows.net;Database=axso-nonprod-appl-mds-lab-transactional-sqldb;fedauth=ActiveDirectoryDefault;encrypt=true;TrustServerCertificate=false;" `
+  outbound-api:local
+```
+
+`OUTBOUND_AUTHORIZATION_API_BASE_URL=""` disables the external authorization
+API calls. `OUTBOUND_REDIS_IGNORE_ALLOWED_USERS_CHECK=true` disables the local
+allowed-users gate that normally runs before the authorization API.
+
+Important: `Integrated Security=SSPI` is Windows integrated authentication.
+That CMDP SQL DSN is not expected to work inside a Linux container unless the
+container/runtime has a Linux-compatible authentication setup. For containerized
+tests, prefer a SQL authentication, managed identity, workload identity, or
+service principal DSN supported by the target environment.
+
 The Docker image includes only `configs/default.yaml`. Environment-specific
 configuration and secrets should be supplied through environment variables,
 or by mounting a config directory and setting:
