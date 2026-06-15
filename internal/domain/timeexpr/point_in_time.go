@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	_ "time/tzdata"
 )
 
 func ParsePointInTime(raw string, loc *time.Location) (time.Time, error) {

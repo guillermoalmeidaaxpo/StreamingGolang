@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 type requestValidator struct{}
@@ -175,10 +175,7 @@ func validateAggregationValues(values [][]string) error {
 }
 
 func validateTimeZone(name string) error {
-	if strings.EqualFold(name, "UTC") {
-		return nil
-	}
-	if _, err := time.LoadLocation(name); err != nil {
+	if _, err := timeexpr.LoadLocation(name); err != nil {
 		return apperr.New(apperr.Invalid, fmt.Sprintf("invalid time zone %q", name))
 	}
 	return nil

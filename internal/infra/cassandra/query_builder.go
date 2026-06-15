@@ -10,6 +10,7 @@ import (
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/app/transactional"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 const defaultYearsAdjustment = 20
@@ -512,11 +513,5 @@ func cassandraTimeZone(id domain.Identifier) string {
 }
 
 func loadCassandraLocation(name string) (*time.Location, error) {
-	switch strings.ToUpper(strings.TrimSpace(name)) {
-	case "", "CET":
-		name = "Europe/Zurich"
-	case "UTC":
-		name = "UTC"
-	}
-	return time.LoadLocation(name)
+	return timeexpr.LoadLocation(name)
 }

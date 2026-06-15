@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 type TransformationProcessor struct{}
@@ -17,7 +18,7 @@ func NewTransformationProcessor() *TransformationProcessor {
 func (p *TransformationProcessor) Process(ctx context.Context, items []DataItem, command Command) []DataItem {
 	location := time.UTC
 	if command.TargetTimeZone != "" {
-		if loc, err := time.LoadLocation(command.TargetTimeZone); err == nil {
+		if loc, err := timeexpr.LoadLocation(command.TargetTimeZone); err == nil {
 			location = loc
 		}
 	}
@@ -33,7 +34,7 @@ func (p *TransformationProcessor) processItem(item DataItem, command Command, lo
 	// 1. Timezone conversion
 	if command.TargetTimeZone != "" {
 		if location == nil {
-			if loc, err := time.LoadLocation(command.TargetTimeZone); err == nil {
+			if loc, err := timeexpr.LoadLocation(command.TargetTimeZone); err == nil {
 				location = loc
 			} else {
 				location = time.UTC

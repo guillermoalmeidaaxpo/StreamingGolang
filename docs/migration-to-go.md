@@ -580,6 +580,9 @@ Current Go transformation support includes:
 - nullable `transformations`
 - nullable `nested`
 - default include-offset behavior based on endpoint mode
+- IANA timezone names such as `Europe/Zurich` are supported in Windows release
+  builds by embedding Go timezone data; C# aliases such as `CET` are normalized
+  through the shared timezone loader
 
 C# behavior to preserve:
 

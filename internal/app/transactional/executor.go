@@ -10,6 +10,7 @@ import (
 
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 type Stream interface {
@@ -210,7 +211,7 @@ func newTransformedStream(ctx context.Context, e *executor, plan Plan) (*transfo
 			go func() {
 				location := time.UTC
 				if step.Command.TargetTimeZone != "" {
-					if loc, err := time.LoadLocation(step.Command.TargetTimeZone); err == nil {
+					if loc, err := timeexpr.LoadLocation(step.Command.TargetTimeZone); err == nil {
 						location = loc
 					}
 				}
