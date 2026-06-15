@@ -194,9 +194,13 @@ Endpoint behavior:
 - Generic endpoints match the C# behavior and return CSV, even if the client
   sends JSON or NDJSON `Accept` headers.
 - Lite endpoint builds CSV requests from query parameters.
-- Streaming JSON, NDJSON, and CSV flush records in configured batches using
-  `execution.stream_batch_size`, matching the C# stream option behavior. The
-  default value is `1000` and can be overridden with
+- Streaming JSON and NDJSON emit column-wise batch objects using
+  `execution.stream_batch_size`, matching the C# stream option behavior. Each
+  batch has scalar `Identifier` plus one array per returned column, and each
+  array contains up to `stream_batch_size` row values. JSON streaming returns an
+  array of these batch objects; NDJSON writes one batch object per line.
+- CSV streaming flushes rows using the same `execution.stream_batch_size`
+  setting. The default value is `1000` and can be overridden with
   `OUTBOUND_EXECUTION_STREAM_BATCH_SIZE`.
 
 ## Request Validation
@@ -555,6 +559,12 @@ Current behavior:
 - streams rows through the repository pipeline
 - applies C#-compatible delivery/RDP tuple filters and skips empty
   delivery/RDP intersections
+- preserves the C# Cassandra curve response contract columns:
+  `Identifier`, `ReferenceTime`, `DeliveryStart`, `DeliveryEnd`,
+  `LegacyDeliveryBucketNumber`, `RelativeDeliveryPeriod`, and `Value`
+- calculates `RelativeDeliveryPeriod` in the Go transformation layer for
+  Cassandra streams and non-stream responses, even when the client projected a
+  smaller set of columns
 
 High-risk parity areas:
 
@@ -585,8 +595,11 @@ Important C# projection parity:
 - requested `CreatedOn` only -> all mapped columns plus `CreatedOn`
 - custom requested columns -> non-projectable key columns plus matching requested
   projectable columns
-- JSON endpoints drop `Identifier/MdoId`
-- CSV endpoints keep `Identifier/MdoId`
+- JSON endpoints expose `Identifier` as the response identifier. Streaming JSON
+  and NDJSON keep it as a scalar per column-wise batch; projected data columns
+  are emitted as arrays.
+- CSV endpoints keep `Identifier/MdoId` as columns where the C# CSV contract
+  expects them.
 - Aggregation CSV headers are generated from aggregation output columns rather
   than raw mapping columns. This preserves aliases such as `DeliveryBucket` and
   `AveragePrice`.

@@ -131,14 +131,21 @@ func (e *executor) Stream(ctx context.Context, plan Plan) (Stream, error) {
 			return nil, missingRepositoryError(query.Source)
 		}
 
-		// If no transformation is needed, use direct stream
-		if step.Command.TargetTimeZone == "" && !step.Command.HasAggregations {
+		// If no transformation is needed, use direct stream.
+		if !needsStreamingTransformation(step.Command) {
 			return repo.Stream(ctx, query)
 		}
 	}
 
 	// For complex plans, use multiplexed transformed stream
 	return newTransformedStream(ctx, e, plan)
+}
+
+func needsStreamingTransformation(command Command) bool {
+	if command.TargetTimeZone != "" || command.HasAggregations {
+		return true
+	}
+	return command.Source == domain.SourceCassandra
 }
 
 type transformedStream struct {

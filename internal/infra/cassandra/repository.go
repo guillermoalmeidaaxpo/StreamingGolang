@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -195,6 +196,7 @@ func mapCassandraRow(row map[string]any, query domain.ExecutableQuery) map[strin
 		"Identifier":                 int64(query.ID),
 		"ReferenceTime":              referenceTimeFromCassandra(row),
 		"DeliveryStart":              deliveryStartFromCassandra(row),
+		"RelativeDeliveryPeriod":     nil,
 		"Value":                      adaptiveRound(asFloat(row["value"])),
 		"LegacyDeliveryBucketNumber": nil,
 	}
@@ -209,6 +211,7 @@ func projectCassandraFields(fields map[string]any, parameters map[string]any) ma
 	if !ok || len(columns) == 0 {
 		return fields
 	}
+	columns = ensureCassandraContractColumns(columns)
 	projected := make(map[string]any, len(columns))
 	for _, column := range columns {
 		if value, exists := fields[column]; exists {
@@ -216,6 +219,33 @@ func projectCassandraFields(fields map[string]any, parameters map[string]any) ma
 		}
 	}
 	return projected
+}
+
+func ensureCassandraContractColumns(columns []string) []string {
+	result := append([]string(nil), columns...)
+	for _, column := range []string{
+		"Identifier",
+		"ReferenceTime",
+		"DeliveryStart",
+		"DeliveryEnd",
+		"LegacyDeliveryBucketNumber",
+		"RelativeDeliveryPeriod",
+		"Value",
+	} {
+		if !hasColumn(result, column) {
+			result = append(result, column)
+		}
+	}
+	return result
+}
+
+func hasColumn(columns []string, name string) bool {
+	for _, column := range columns {
+		if strings.EqualFold(column, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func referenceTimeFromCassandra(row map[string]any) time.Time {

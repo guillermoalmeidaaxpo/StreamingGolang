@@ -3,6 +3,7 @@ package transactional
 import (
 	"context"
 	"testing"
+	"time"
 
 	"streaming-golang/internal/domain"
 )
@@ -80,5 +81,35 @@ func TestExecutorReferenceDataDeduplicatesSplitSteps(t *testing.T) {
 
 	if len(response.ReferenceData) != 1 || response.ReferenceData[0] != 10 {
 		t.Fatalf("referenceData = %#v, want deduplicated [10]", response.ReferenceData)
+	}
+}
+
+func TestTransformationProcessorCalculatesCassandraRelativeDeliveryPeriodByDefault(t *testing.T) {
+	processor := NewTransformationProcessor()
+	item := DataItem{
+		ID: 536013751,
+		Fields: map[string]any{
+			"ReferenceTime":              time.Date(2024, 4, 26, 0, 0, 0, 0, time.UTC),
+			"DeliveryStart":              time.Date(2024, 4, 26, 3, 0, 0, 0, time.UTC),
+			"RelativeDeliveryPeriod":     nil,
+			"LegacyDeliveryBucketNumber": nil,
+			"Value":                      115.9,
+		},
+	}
+	command := Command{
+		Source: domain.SourceCassandra,
+		Mappings: []domain.Mapping{{
+			Resolution: "PT1H",
+		}},
+		Columns: []string{"Value"},
+	}
+
+	processed := processor.Process(context.Background(), []DataItem{item}, command)
+
+	if len(processed) != 1 {
+		t.Fatalf("items = %d, want 1", len(processed))
+	}
+	if got := processed[0].Fields["RelativeDeliveryPeriod"]; got != int64(3) {
+		t.Fatalf("RelativeDeliveryPeriod = %#v, want 3", got)
 	}
 }

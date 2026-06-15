@@ -136,6 +136,7 @@ func cassandraProjectionColumns(columns []string) []string {
 		"ReferenceTime",
 		"DeliveryStart",
 		"DeliveryEnd",
+		"RelativeDeliveryPeriod",
 		"Value",
 		"LegacyDeliveryBucketNumber",
 	}

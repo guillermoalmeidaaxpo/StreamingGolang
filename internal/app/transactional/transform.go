@@ -48,7 +48,7 @@ func (p *TransformationProcessor) processItem(item DataItem, command Command, lo
 	}
 
 	// 2. RelativeDeliveryPeriod calculation (for Cassandra data)
-	if command.Source == domain.SourceCassandra && containsColumn(command.Columns, "RelativeDeliveryPeriod") {
+	if command.Source == domain.SourceCassandra {
 		p.calculateRDP(item, command)
 	}
 

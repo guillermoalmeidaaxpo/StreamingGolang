@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +91,91 @@ func TestTransactionalStreamingNegotiatesNDJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			t.Fatalf("decode ndjson line: %v; line=%s", err, line)
 		}
+	}
+}
+
+func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
+	stream := &csvTestStream{items: []transactional.DataItem{
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 1.1}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 2.2}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 3.3}},
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
+	rec := httptest.NewRecorder()
+
+	if err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 2); err != nil {
+		t.Fatalf("write stream: %v", err)
+	}
+
+	var batches []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &batches); err != nil {
+		t.Fatalf("decode JSON stream body: %v; body=%s", err, rec.Body.String())
+	}
+	if len(batches) != 2 {
+		t.Fatalf("batches = %d, want 2; body=%s", len(batches), rec.Body.String())
+	}
+	if got := batches[0]["Identifier"]; got != float64(536013751) {
+		t.Fatalf("Identifier = %#v, want 536013751", got)
+	}
+	values, ok := batches[0]["Value"].([]any)
+	if !ok || len(values) != 2 {
+		t.Fatalf("first batch Value = %#v, want array length 2", batches[0]["Value"])
+	}
+	values, ok = batches[1]["Value"].([]any)
+	if !ok || len(values) != 1 {
+		t.Fatalf("second batch Value = %#v, want array length 1", batches[1]["Value"])
+	}
+}
+
+func TestTransactionalNDJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
+	stream := &csvTestStream{items: []transactional.DataItem{
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 1.1}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 2.2}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 3.3}},
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
+	rec := httptest.NewRecorder()
+
+	if err := writeTransactionalNDJSONStream(context.Background(), rec, req, stream, 2); err != nil {
+		t.Fatalf("write stream: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2; body=%s", len(lines), rec.Body.String())
+	}
+	for _, line := range lines {
+		var batch map[string]any
+		if err := json.Unmarshal([]byte(line), &batch); err != nil {
+			t.Fatalf("decode ndjson line: %v; line=%s", err, line)
+		}
+		if _, ok := batch["Value"].([]any); !ok {
+			t.Fatalf("Value = %#v, want array", batch["Value"])
+		}
+	}
+}
+
+func TestTransactionalJSONStreamStartsNewBatchWhenIdentifierChanges(t *testing.T) {
+	stream := &csvTestStream{items: []transactional.DataItem{
+		{ID: 10, Fields: map[string]any{"Value": 1}},
+		{ID: 20, Fields: map[string]any{"Value": 2}},
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
+	rec := httptest.NewRecorder()
+
+	if err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 1000); err != nil {
+		t.Fatalf("write stream: %v", err)
+	}
+
+	var batches []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &batches); err != nil {
+		t.Fatalf("decode JSON stream body: %v; body=%s", err, rec.Body.String())
+	}
+	if len(batches) != 2 {
+		t.Fatalf("batches = %d, want 2; body=%s", len(batches), rec.Body.String())
+	}
+	if batches[0]["Identifier"] != float64(10) || batches[1]["Identifier"] != float64(20) {
+		t.Fatalf("identifiers = %#v, %#v; want 10, 20", batches[0]["Identifier"], batches[1]["Identifier"])
 	}
 }
 
