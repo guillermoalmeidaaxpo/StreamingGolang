@@ -804,6 +804,32 @@ Run:
 .\bin\outbound-api.exe
 ```
 
+Build Docker image:
+
+```powershell
+docker build -t outbound-api:local .
+```
+
+Run Docker image:
+
+```powershell
+docker run --rm -p 8080:8080 `
+  -e OUTBOUND_ENV=productive `
+  -e OUTBOUND_AUTHORIZATION_API_BASE_URL=https://authorization-hs.lab.mds.axpo.com `
+  -e OUTBOUND_CMDP_SQL_DSN="<cmdp-dsn>" `
+  -e OUTBOUND_MAPPING_SQL_DSN="<mapping-dsn>" `
+  -e OUTBOUND_MDS_SQL_DSN="<mds-dsn>" `
+  outbound-api:local
+```
+
+The Docker image includes only `configs/default.yaml`. Environment-specific
+configuration and secrets should be supplied through environment variables,
+or by mounting a config directory and setting:
+
+```powershell
+-e OUTBOUND_CONFIG_DIR=/app/configs
+```
+
 Generate ANTLR parser:
 
 ```powershell

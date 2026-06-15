@@ -1,0 +1,14 @@
+.git
+.gocache
+bin
+dist
+vendor
+
+*.exe
+*.test
+*.out
+
+configs/development.yaml
+configs/productive.yaml
+.env
+.env.local
