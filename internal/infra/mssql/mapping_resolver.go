@@ -110,6 +110,7 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 			slog.String("reference_time_column", referenceTimeColumn),
 			slog.String("delivery_start_column", deliveryStartColumn),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return time.Time{}, apperr.Wrap(apperr.Unavailable, "read CMDP filter limits", err)
@@ -133,6 +134,7 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 		slog.Time("watermark", res),
 		slog.Bool("watermark_found", maxReferenceTime.Valid),
 		slog.Duration("duration", time.Since(start)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 	return res.UTC(), nil
 }
@@ -333,6 +335,7 @@ func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Ide
 			slog.Int("parameter_count", len(args)),
 			slog.String("query", compactSQL(query)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, "read CMDP mappings", err)
@@ -352,6 +355,7 @@ func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Ide
 			slog.Any("identifiers", ids),
 			slog.Int("row_count", len(result)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, "iterate CMDP mappings", err)
@@ -361,6 +365,7 @@ func (r *MappingResolver) readCMDPMappings(ctx context.Context, ids []domain.Ide
 		slog.Any("identifiers", ids),
 		slog.Int("row_count", len(result)),
 		slog.Duration("duration", time.Since(start)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 	return result, nil
 }
@@ -391,6 +396,7 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 			slog.Int("parameter_count", len(args)),
 			slog.String("query", compactSQL(query)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, "read MDS mappings", err)
@@ -411,6 +417,7 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 			slog.String("data_category", string(category)),
 			slog.Int("row_count", len(result)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, "iterate MDS mappings", err)
@@ -420,6 +427,7 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 			slog.Any("identifiers", ids),
 			slog.String("data_category", string(category)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 		)
 		return nil, apperr.New(apperr.NotFound, "requested identifiers do not have MDS mappings")
 	}
@@ -429,6 +437,7 @@ func (r *MappingResolver) readMDSDomainMappings(ctx context.Context, ids []domai
 		slog.String("data_category", string(category)),
 		slog.Int("row_count", len(result)),
 		slog.Duration("duration", time.Since(start)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 	return buildDomainMappings(result, category), nil
 }

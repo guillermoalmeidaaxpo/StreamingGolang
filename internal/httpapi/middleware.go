@@ -36,6 +36,7 @@ func requestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.Duration("duration", time.Since(start)),
+				slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 				slog.String("correlation_id", correlationIDFromContext(r.Context())),
 			)
 		})

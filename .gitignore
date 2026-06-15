@@ -17,6 +17,7 @@
 
 # Dependency directories
 /vendor/
+.gocache/
 
 # IDEs
 .idea/

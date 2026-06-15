@@ -755,11 +755,24 @@ Structured logs include:
 - mapping resolution
 - mapping SQL queries
 - authorization API calls and status
+- handler-level performance phases:
+  - request body/query decode and JSON Schema validation
+  - pipeline execution/opening
+  - response writing
+- pipeline-level performance phases:
+  - business validation
+  - ANTLR filter parsing
+  - plan building
+  - query execution or stream opening
 - selected strategy/source
 - watermark reads
 - quote-index generation
 - MSSQL/Cassandra query execution and parameters
 - query execution failures with duration and context
+
+Performance-sensitive logs include both raw Go `duration` values and explicit
+`duration_ms` fields so Go/Rust/C# request comparisons can be done without
+manually converting nanoseconds.
 
 In development/local mode, wrapped application error causes can be exposed in
 problem details to speed up debugging. Productive mode should keep external

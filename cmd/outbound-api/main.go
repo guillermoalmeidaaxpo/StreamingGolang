@@ -115,7 +115,7 @@ func main() {
 			ReferenceTimeSplitDays: cfg.Stream.ReferenceTimeSplitDays,
 		}), transactional.WithMappingResolver(mappingResolver), transactional.WithQueryBuilder(queryBuilder), transactional.WithLogger(logger)),
 		transactional.NewExecutor(repositories, cfg.Stream.MaxQueriesInParallel),
-	)
+	).WithLogger(logger)
 
 	httpLicenseValidator := authz.NewHttpLicenseValidator(
 		cfg.AuthorizationAPI.BaseURL,

@@ -222,6 +222,7 @@ func (v *HttpLicenseValidator) postJSON(ctx context.Context, call authorizationC
 			slog.Int("stage_id", int(call.StageID)),
 			slog.String("correlation_id", call.InternalCorrelationID),
 			slog.Duration("duration", duration),
+			slog.Int64("duration_ms", duration.Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, fmt.Sprintf("call authorization service %s", call.Endpoint), err)
@@ -238,6 +239,7 @@ func (v *HttpLicenseValidator) postJSON(ctx context.Context, call authorizationC
 			slog.String("correlation_id", call.InternalCorrelationID),
 			slog.Int("status", resp.StatusCode),
 			slog.Duration("duration", duration),
+			slog.Int64("duration_ms", duration.Milliseconds()),
 			slog.Any("error", err),
 		)
 	}
@@ -251,6 +253,7 @@ func (v *HttpLicenseValidator) postJSON(ctx context.Context, call authorizationC
 		slog.String("correlation_id", call.InternalCorrelationID),
 		slog.Int("status", resp.StatusCode),
 		slog.Duration("duration", duration),
+		slog.Int64("duration_ms", duration.Milliseconds()),
 		slog.Int("response_bytes", len(responseBody)),
 		slog.String("response_preview", responsePreview),
 	)

@@ -21,6 +21,7 @@ type Dependencies struct {
 func NewRouter(deps Dependencies) http.Handler {
 	h := handlers{
 		config:                deps.Config,
+		logger:                deps.Logger,
 		transactionalPipeline: deps.TransactionalPipeline,
 	}
 

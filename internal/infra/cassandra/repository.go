@@ -61,6 +61,7 @@ func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) 
 			slog.Any("arguments", cassandraArguments(query.Arguments)),
 			slog.Int("row_count", len(items)),
 			slog.Duration("duration", time.Since(start)),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 			slog.Any("error", err),
 		)
 		return nil, apperr.Wrap(apperr.Unavailable, "execute cassandra query", err)
@@ -72,6 +73,7 @@ func (r *repository) Execute(ctx context.Context, query domain.ExecutableQuery) 
 		slog.String("data_category", string(query.DataCategory)),
 		slog.Int("row_count", len(items)),
 		slog.Duration("duration", time.Since(start)),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
 	)
 
 	return items, nil
@@ -155,6 +157,7 @@ func (s *cassandraStream) close() error {
 				slog.String("query", s.query.Statement),
 				slog.Any("arguments", cassandraArguments(s.query.Arguments)),
 				slog.Duration("duration", time.Since(s.start)),
+				slog.Int64("duration_ms", time.Since(s.start).Milliseconds()),
 				slog.Any("error", s.closeErr),
 			)
 		}
