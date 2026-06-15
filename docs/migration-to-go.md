@@ -304,6 +304,22 @@ Generic endpoint behavior:
 - This matches the C# generic behavior where one generic request can retrieve
   different data categories.
 
+CMDP filter-limit and watermark reads now use a process-local memory cache like
+the C# SQL repository:
+
+- cache key shape: `FilterLimits_<id>_True_False_False`
+- absolute expiration: 1 hour
+- sliding expiration: 10 minutes
+- cache hits bypass `[MDS].[CalculateMinMaxReferenceTimeDeliveryStart]`
+- cache-hit logs include the identifier, key, view, reference-time column, and
+  resolved watermark
+
+This covers the C# `GetMaxReferenceTime` / filter-limits cache path used by the
+hybrid CMDP/Cassandra selector. The C# repository also caches
+`GetMaxReferenceTimeBefore` results for a stored-procedure-based `latest(...)`
+path; the Go implementation currently handles Hyperscale `latest(...)` with SQL
+CTEs, so that exact cache path has not been ported.
+
 ## Data-Source Selection
 
 The Go selector follows the C# `MdoDataFetchingStrategyParser` priority:
@@ -828,6 +844,7 @@ Implemented:
 - JSON Schema validation.
 - ANTLR parser and visitor-backed filter AST.
 - Mapping resolver for CMDP and MDS/Hyperscale mappings.
+- C#-style process-local CMDP filter-limit/watermark memory cache.
 - Strategy selection matching C# priority.
 - Split and hybrid planning.
 - CMDP quote-index planning.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"streaming-golang/internal/app/apperr"
@@ -18,6 +19,7 @@ type MappingResolver struct {
 	mdsDB         *sql.DB
 	cmdpSQLDB     *sql.DB
 	logger        *slog.Logger
+	filterLimits  *filterLimitsMemoryCache
 }
 
 func NewMappingResolver(cmdpMappingDB, mdsDB, cmdpSQLDB *sql.DB, logger *slog.Logger) *MappingResolver {
@@ -29,6 +31,7 @@ func NewMappingResolver(cmdpMappingDB, mdsDB, cmdpSQLDB *sql.DB, logger *slog.Lo
 		mdsDB:         mdsDB,
 		cmdpSQLDB:     cmdpSQLDB,
 		logger:        logger,
+		filterLimits:  newFilterLimitsMemoryCache(time.Hour, 10*time.Minute),
 	}
 }
 
@@ -45,6 +48,23 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 	referenceTimeColumn := referenceTimeSourceColumn(mapping)
 	if strings.TrimSpace(referenceTimeColumn) == "" || strings.TrimSpace(mapping.IndexField) == "" {
 		return time.Now().UTC(), nil
+	}
+	cache := r.getFilterLimitsCache()
+	cacheKey := filterLimitsCacheKey(mapping.ID, true, false, false)
+	if limits, ok := cache.Get(cacheKey); ok {
+		watermark := time.Now().UTC()
+		if limits.MaxReferenceTime.Valid {
+			watermark = limits.MaxReferenceTime.Time.UTC()
+		}
+		r.logger.InfoContext(ctx, "CMDP filter limits cache hit",
+			slog.Int64("identifier", int64(mapping.ID)),
+			slog.String("cache_key", cacheKey),
+			slog.String("view", mapping.ViewName),
+			slog.String("reference_time_column", referenceTimeColumn),
+			slog.Time("watermark", watermark),
+			slog.Bool("watermark_found", limits.MaxReferenceTime.Valid),
+		)
+		return watermark, nil
 	}
 
 	start := time.Now()
@@ -99,6 +119,12 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 	if !maxReferenceTime.Valid {
 		res = time.Now().UTC()
 	}
+	cache.Set(cacheKey, filterLimits{
+		MinReferenceTime: minReferenceTime,
+		MaxReferenceTime: maxReferenceTime,
+		MinDeliveryStart: minDeliveryStart,
+		MaxDeliveryStart: maxDeliveryStart,
+	})
 
 	r.logger.InfoContext(ctx, "CMDP filter limits read",
 		slog.Int64("identifier", int64(mapping.ID)),
@@ -109,6 +135,102 @@ func (r *MappingResolver) GetWatermark(ctx context.Context, mappings []domain.Ma
 		slog.Duration("duration", time.Since(start)),
 	)
 	return res.UTC(), nil
+}
+
+func (r *MappingResolver) getFilterLimitsCache() *filterLimitsMemoryCache {
+	if r.filterLimits == nil {
+		r.filterLimits = newFilterLimitsMemoryCache(time.Hour, 10*time.Minute)
+	}
+	return r.filterLimits
+}
+
+type filterLimits struct {
+	MinReferenceTime sql.NullTime
+	MaxReferenceTime sql.NullTime
+	MinDeliveryStart sql.NullTime
+	MaxDeliveryStart sql.NullTime
+}
+
+type filterLimitsCacheEntry struct {
+	value    filterLimits
+	created  time.Time
+	accessed time.Time
+}
+
+type filterLimitsMemoryCache struct {
+	mu       sync.Mutex
+	entries  map[string]filterLimitsCacheEntry
+	absolute time.Duration
+	sliding  time.Duration
+	now      func() time.Time
+}
+
+func newFilterLimitsMemoryCache(absolute, sliding time.Duration) *filterLimitsMemoryCache {
+	return &filterLimitsMemoryCache{
+		entries:  make(map[string]filterLimitsCacheEntry),
+		absolute: absolute,
+		sliding:  sliding,
+		now:      time.Now,
+	}
+}
+
+func (c *filterLimitsMemoryCache) Get(key string) (filterLimits, bool) {
+	if c == nil {
+		return filterLimits{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.entries[key]
+	if !ok {
+		return filterLimits{}, false
+	}
+	now := c.now()
+	if c.expired(entry, now) {
+		delete(c.entries, key)
+		return filterLimits{}, false
+	}
+	entry.accessed = now
+	c.entries[key] = entry
+	return entry.value, true
+}
+
+func (c *filterLimitsMemoryCache) Set(key string, value filterLimits) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+	c.entries[key] = filterLimitsCacheEntry{
+		value:    value,
+		created:  now,
+		accessed: now,
+	}
+}
+
+func (c *filterLimitsMemoryCache) expired(entry filterLimitsCacheEntry, now time.Time) bool {
+	if c.absolute > 0 && now.Sub(entry.created) >= c.absolute {
+		return true
+	}
+	return c.sliding > 0 && now.Sub(entry.accessed) >= c.sliding
+}
+
+func filterLimitsCacheKey(id domain.Identifier, getMaxReferenceTime, getMinReferenceTime, getMinMaxDeliveryStart bool) string {
+	return fmt.Sprintf("FilterLimits_%d_%s_%s_%s",
+		id,
+		csharpBool(getMaxReferenceTime),
+		csharpBool(getMinReferenceTime),
+		csharpBool(getMinMaxDeliveryStart),
+	)
+}
+
+func csharpBool(value bool) string {
+	if value {
+		return "True"
+	}
+	return "False"
 }
 
 func calculateMinMaxReferenceTimeDeliveryStartCommandText() string {

@@ -3,6 +3,7 @@ package mssql
 import (
 	"database/sql"
 	"testing"
+	"time"
 
 	"streaming-golang/internal/domain"
 )
@@ -122,5 +123,50 @@ func TestForceCMDPClearsHyperscaleID(t *testing.T) {
 	}
 	if mapping.Source != domain.SourceCMDP {
 		t.Fatalf("expected source CMDP, got %q", mapping.Source)
+	}
+}
+
+func TestFilterLimitsCacheKeyMatchesCSharpShape(t *testing.T) {
+	got := filterLimitsCacheKey(536013751, true, false, false)
+	const want = "FilterLimits_536013751_True_False_False"
+	if got != want {
+		t.Fatalf("cache key = %q, want %q", got, want)
+	}
+}
+
+func TestFilterLimitsMemoryCacheUsesSlidingAndAbsoluteExpiration(t *testing.T) {
+	now := time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	cache := newFilterLimitsMemoryCache(time.Hour, 10*time.Minute)
+	cache.now = func() time.Time { return now }
+
+	key := filterLimitsCacheKey(10, true, false, false)
+	value := filterLimits{
+		MaxReferenceTime: sql.NullTime{
+			Time:  time.Date(2026, 6, 15, 9, 0, 0, 0, time.UTC),
+			Valid: true,
+		},
+	}
+	cache.Set(key, value)
+
+	now = now.Add(9 * time.Minute)
+	if _, ok := cache.Get(key); !ok {
+		t.Fatal("expected cache hit before sliding expiration")
+	}
+
+	now = now.Add(9 * time.Minute)
+	if _, ok := cache.Get(key); !ok {
+		t.Fatal("expected cache hit after sliding expiration was refreshed")
+	}
+
+	now = now.Add(11 * time.Minute)
+	if _, ok := cache.Get(key); ok {
+		t.Fatal("expected cache miss after sliding expiration")
+	}
+
+	now = time.Date(2026, 6, 15, 10, 0, 0, 0, time.UTC)
+	cache.Set(key, value)
+	now = now.Add(time.Hour)
+	if _, ok := cache.Get(key); ok {
+		t.Fatal("expected cache miss at absolute expiration")
 	}
 }
