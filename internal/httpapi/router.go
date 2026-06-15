@@ -22,6 +22,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	h := handlers{
 		config:                deps.Config,
 		logger:                deps.Logger,
+		streamFlushEvery:      deps.Config.Stream.BatchStreamSize,
 		transactionalPipeline: deps.TransactionalPipeline,
 	}
 

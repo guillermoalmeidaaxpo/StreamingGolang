@@ -38,29 +38,41 @@ func writeTransactionalCSV(w http.ResponseWriter, response transactional.Respons
 	return writer.Error()
 }
 
-func writeTransactionalCSVStream(ctx context.Context, w http.ResponseWriter, stream transactional.Stream, columns []string, includeOffset bool, attachment bool) error {
+func writeTransactionalCSVStream(ctx context.Context, w http.ResponseWriter, stream transactional.Stream, columns []string, includeOffset bool, attachment bool, flushEvery int) error {
 	setCSVHeaders(w, attachment)
 	if len(columns) == 0 {
 		return nil
 	}
+	flushEvery = normalizeStreamFlushEvery(flushEvery)
 
 	writer := csv.NewWriter(w)
 	flusher, _ := w.(http.Flusher)
 	if err := writer.Write(columns); err != nil {
 		return err
 	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return err
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
 
+	index := 0
 	for stream.Next(ctx) {
 		item := stream.Item()
 		if err := writer.Write(csvRow(columns, item, includeOffset)); err != nil {
 			return err
 		}
-		writer.Flush()
-		if err := writer.Error(); err != nil {
-			return err
-		}
-		if flusher != nil {
-			flusher.Flush()
+		index++
+		if index%flushEvery == 0 {
+			writer.Flush()
+			if err := writer.Error(); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 	}
 

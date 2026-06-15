@@ -194,6 +194,10 @@ Endpoint behavior:
 - Generic endpoints match the C# behavior and return CSV, even if the client
   sends JSON or NDJSON `Accept` headers.
 - Lite endpoint builds CSV requests from query parameters.
+- Streaming JSON, NDJSON, and CSV flush records in configured batches using
+  `execution.stream_batch_size`, matching the C# stream option behavior. The
+  default value is `1000` and can be overridden with
+  `OUTBOUND_EXECUTION_STREAM_BATCH_SIZE`.
 
 ## Request Validation
 
@@ -572,6 +576,8 @@ The Go CSV writer preserves the same concept:
 - headers are based on mappings and requested projection columns
 - CSV generic endpoints ignore JSON/NDJSON accept negotiation and return CSV
 - CSV streaming writes headers once and streams rows/batches
+- CSV streaming flushes according to `execution.stream_batch_size`, the same
+  option used for JSON and NDJSON streaming.
 
 Important C# projection parity:
 

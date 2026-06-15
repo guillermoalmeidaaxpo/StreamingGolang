@@ -10,14 +10,18 @@ import (
 	"streaming-golang/internal/app/transactional"
 )
 
-const ndjsonContentType = "application/x-ndjson"
+const (
+	ndjsonContentType       = "application/x-ndjson"
+	defaultStreamFlushEvery = 1000
+)
 
 func acceptsNDJSON(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), ndjsonContentType)
 }
 
-func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream) error {
+func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	flushEvery = normalizeStreamFlushEvery(flushEvery)
 
 	flusher, _ := w.(http.Flusher)
 	encoder := json.NewEncoder(w)
@@ -40,7 +44,7 @@ func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r 
 			return err
 		}
 		index++
-		if flusher != nil {
+		if shouldFlushStream(index, flushEvery, flusher) {
 			flusher.Flush()
 		}
 	}
@@ -63,8 +67,9 @@ func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r 
 	return err
 }
 
-func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream) error {
+func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) error {
 	w.Header().Set("Content-Type", ndjsonContentType)
+	flushEvery = normalizeStreamFlushEvery(flushEvery)
 
 	encoder := json.NewEncoder(w)
 	flusher, _ := w.(http.Flusher)
@@ -75,7 +80,7 @@ func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, 
 			return err
 		}
 		index++
-		if flusher != nil {
+		if shouldFlushStream(index, flushEvery, flusher) {
 			flusher.Flush()
 		}
 	}
@@ -90,6 +95,17 @@ func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	return nil
+}
+
+func shouldFlushStream(index, flushEvery int, flusher http.Flusher) bool {
+	return flusher != nil && index > 0 && index%flushEvery == 0
+}
+
+func normalizeStreamFlushEvery(value int) int {
+	if value <= 0 {
+		return defaultStreamFlushEvery
+	}
+	return value
 }
 
 func streamErrorObject(message string, itemIndex int, r *http.Request, streamFormat string) map[string]any {

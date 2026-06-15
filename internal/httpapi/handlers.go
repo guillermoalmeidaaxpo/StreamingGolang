@@ -15,6 +15,7 @@ import (
 type handlers struct {
 	config                config.Config
 	logger                *slog.Logger
+	streamFlushEvery      int
 	transactionalPipeline *transactional.Pipeline
 }
 
@@ -94,7 +95,7 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 
 	writeStart := time.Now()
 	if acceptsNDJSON(r) {
-		if err := writeTransactionalNDJSONStream(r.Context(), w, r, stream); err != nil && !errors.Is(err, r.Context().Err()) {
+		if err := writeTransactionalNDJSONStream(r.Context(), w, r, stream, h.streamFlushEvery); err != nil && !errors.Is(err, r.Context().Err()) {
 			return
 		}
 		h.logPhase(r, "response written", writeStart,
@@ -104,7 +105,7 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := writeTransactionalJSONStream(r.Context(), w, r, stream); err != nil && !errors.Is(err, r.Context().Err()) {
+	if err := writeTransactionalJSONStream(r.Context(), w, r, stream, h.streamFlushEvery); err != nil && !errors.Is(err, r.Context().Err()) {
 		return
 	}
 	h.logPhase(r, "response written", writeStart,
@@ -175,7 +176,7 @@ func (h handlers) genericCSVStream(w http.ResponseWriter, r *http.Request) {
 	)
 
 	writeStart := time.Now()
-	if err := writeTransactionalCSVStream(r.Context(), w, stream, csvColumnsFromPlan(plan), csvIncludeOffset(plan), false); err != nil && !errors.Is(err, r.Context().Err()) {
+	if err := writeTransactionalCSVStream(r.Context(), w, stream, csvColumnsFromPlan(plan), csvIncludeOffset(plan), false, h.streamFlushEvery); err != nil && !errors.Is(err, r.Context().Err()) {
 		return
 	}
 	h.logPhase(r, "response written", writeStart,
