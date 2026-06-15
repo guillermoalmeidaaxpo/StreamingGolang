@@ -1,0 +1,7 @@
+release=outbound-api-windows-amd64-20260615-114628-efaf08a-dirty
+commit=efaf08a
+dirty=true
+goos=windows
+goarch=amd64
+built_at=2026-06-15T11:46:55.9830102+02:00
+flags=-trimpath -ldflags=-s -w

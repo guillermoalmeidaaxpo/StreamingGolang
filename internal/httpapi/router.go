@@ -50,9 +50,9 @@ func NewRouter(deps Dependencies) http.Handler {
 
 	publicMux.Handle("/api/v1/", protected)
 
-	return requestLogger(deps.Logger)(
+	return correlationID(
 		recoverer(deps.Logger)(
-			correlationID(publicMux),
+			requestLogger(deps.Logger)(publicMux),
 		),
 	)
 }

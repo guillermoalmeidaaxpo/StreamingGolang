@@ -108,6 +108,8 @@ type cassandraStream struct {
 	query     domain.ExecutableQuery
 	logger    *slog.Logger
 	start     time.Time
+	firstRow  time.Time
+	rowCount  int
 	item      transactional.DataItem
 	err       error
 	closeOnce sync.Once
@@ -127,6 +129,10 @@ func (s *cassandraStream) Next(ctx context.Context) bool {
 	s.item = transactional.DataItem{
 		ID:     s.id,
 		Fields: mapCassandraRow(row, s.query),
+	}
+	s.rowCount++
+	if s.rowCount == 1 {
+		s.firstRow = time.Now()
 	}
 	return true
 }
@@ -160,6 +166,25 @@ func (s *cassandraStream) close() error {
 				slog.Int64("duration_ms", time.Since(s.start).Milliseconds()),
 				slog.Any("error", s.closeErr),
 			)
+			return
+		}
+		if s.logger != nil {
+			attrs := []slog.Attr{
+				slog.Int64("identifier", int64(s.query.ID)),
+				slog.String("source", string(s.query.Source)),
+				slog.String("data_category", string(s.query.DataCategory)),
+				slog.Int("row_count", s.rowCount),
+				slog.Duration("duration", time.Since(s.start)),
+				slog.Int64("duration_ms", time.Since(s.start).Milliseconds()),
+			}
+			if !s.firstRow.IsZero() {
+				firstRowDuration := s.firstRow.Sub(s.start)
+				attrs = append(attrs,
+					slog.Duration("first_row_duration", firstRowDuration),
+					slog.Int64("first_row_duration_ms", firstRowDuration.Milliseconds()),
+				)
+			}
+			s.logger.LogAttrs(s.ctx, slog.LevelInfo, "cassandra stream completed", attrs...)
 		}
 	})
 	return s.closeErr

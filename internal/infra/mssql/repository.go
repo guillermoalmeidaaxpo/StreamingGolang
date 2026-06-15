@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"streaming-golang/internal/app/apperr"
@@ -129,11 +130,13 @@ func (r *repository) Stream(ctx context.Context, query domain.ExecutableQuery) (
 	}
 
 	return &mssqlStream{
-		ctx:  ctx,
-		rows: rows,
-		cols: cols,
-		id:   query.ID,
-		repo: r,
+		ctx:   ctx,
+		rows:  rows,
+		cols:  cols,
+		id:    query.ID,
+		query: query,
+		repo:  r,
+		start: start,
 	}, nil
 }
 
@@ -188,13 +191,19 @@ func (r *repository) scanRow(rows *sql.Rows, cols []string) (map[string]any, err
 }
 
 type mssqlStream struct {
-	ctx  context.Context
-	rows *sql.Rows
-	cols []string
-	id   domain.Identifier
-	item transactional.DataItem
-	err  error
-	repo *repository
+	ctx       context.Context
+	rows      *sql.Rows
+	cols      []string
+	id        domain.Identifier
+	query     domain.ExecutableQuery
+	item      transactional.DataItem
+	err       error
+	repo      *repository
+	start     time.Time
+	firstRow  time.Time
+	rowCount  int
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (s *mssqlStream) Next(ctx context.Context) bool {
@@ -216,6 +225,10 @@ func (s *mssqlStream) Next(ctx context.Context) bool {
 		ID:     s.id,
 		Fields: fields,
 	}
+	s.rowCount++
+	if s.rowCount == 1 {
+		s.firstRow = time.Now()
+	}
 	return true
 }
 
@@ -231,5 +244,38 @@ func (s *mssqlStream) Err() error {
 }
 
 func (s *mssqlStream) Close() error {
-	return s.rows.Close()
+	s.closeOnce.Do(func() {
+		s.closeErr = s.rows.Close()
+		if s.closeErr != nil && s.repo != nil && s.repo.logger != nil {
+			s.repo.logger.ErrorContext(s.ctx, "stream mssql query close failed",
+				slog.Int64("identifier", int64(s.query.ID)),
+				slog.String("source", string(s.query.Source)),
+				slog.String("data_category", string(s.query.DataCategory)),
+				slog.Int("row_count", s.rowCount),
+				slog.Duration("duration", time.Since(s.start)),
+				slog.Int64("duration_ms", time.Since(s.start).Milliseconds()),
+				slog.Any("error", s.closeErr),
+			)
+			return
+		}
+		if s.repo != nil && s.repo.logger != nil {
+			attrs := []slog.Attr{
+				slog.Int64("identifier", int64(s.query.ID)),
+				slog.String("source", string(s.query.Source)),
+				slog.String("data_category", string(s.query.DataCategory)),
+				slog.Int("row_count", s.rowCount),
+				slog.Duration("duration", time.Since(s.start)),
+				slog.Int64("duration_ms", time.Since(s.start).Milliseconds()),
+			}
+			if !s.firstRow.IsZero() {
+				firstRowDuration := s.firstRow.Sub(s.start)
+				attrs = append(attrs,
+					slog.Duration("first_row_duration", firstRowDuration),
+					slog.Int64("first_row_duration_ms", firstRowDuration.Milliseconds()),
+				)
+			}
+			s.repo.logger.LogAttrs(s.ctx, slog.LevelInfo, "mssql stream completed", attrs...)
+		}
+	})
+	return s.closeErr
 }

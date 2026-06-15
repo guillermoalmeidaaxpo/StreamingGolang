@@ -1,0 +1,81 @@
+meta:
+  build_number: local
+  stage: productive
+
+http:
+  host: ""
+  port: 8080
+  read_header_timeout: 5s
+
+auth:
+  mode: jwt
+  issuer: https://login.microsoftonline.com/8619c67c-945a-48ae-8e77-35b1b71c9b98/v2.0
+  audiences:
+    - 33656585-7aa3-4fc1-881a-e9c9693dae00
+    - db738011-6468-4ea8-a1a7-089502673a96
+    - 4c93e02a-fcfc-4a89-91f5-7b4cf78b4bf6
+  allowed_roles:
+    - DataReader
+  require_https_metadata: true
+
+authorization_api:
+  base_url: NOT SET
+  authorize_path: /api/v1/TimeSeries/Authorize
+  universe_authorize_path: /api/v1/DataUniverse/BulkAuthorize
+  timeout: 30s
+
+datastores:
+  cmdp_sql:
+  mapping_sql:
+  mds_sql:
+  mesap_mapping_sql:
+  redis:
+    address: NOT SET
+    tls: true
+    ignore_allowed_users_check: false
+    allowed_users: []
+  cassandra:
+    data_centers: {}
+    keyspace: ts
+    primary_data_center: ""
+    local_connections: 4
+    local_max_connections: 10
+    remote_connections: 2
+    remote_max_connections: 4
+    port: 9042
+    max_parallel_queries: 10
+    connection_timeout: 10s
+    read_timeout: 12s
+    table_mappings:
+      power: hpfc
+      gas: gas_pfc
+      oil: oil_pfc
+      coal: coal_pfc
+
+database:
+  connect_retry:
+    timeout: 60s
+    count: 3
+    interval: 10s
+  command_retry:
+    command_timeout: 120s
+    count: 3
+    interval: 5s
+    max_interval: 120s
+
+logging:
+  default_level: info
+  microsoft_level: warn
+  system_level: warn
+  application_insights_default_level: info
+
+execution:
+  batch_size: 10000
+  stream_batch_size: 1000
+  optimized_batch_size: 10000
+  max_sql_parallel: 5
+  max_cassandra_parallel: 5
+  max_sql_connections: 20
+  max_cassandra_connections: 20
+  reference_time_split_days: 10
+  cassandra_reference_time_split_days: 5
