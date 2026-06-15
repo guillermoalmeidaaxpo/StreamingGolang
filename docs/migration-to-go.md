@@ -423,6 +423,13 @@ Important C# parity rules:
   `TVF_Get<DataCategory>ByCreatedOnLatestReferenceTime`.
 - If `VersionAsOf` is present and real filters are present, use
   `TVF_Get<DataCategory>ByCreatedOn`.
+- `latest(...)` on Hyperscale follows the C# `LatestReference` CTE pattern:
+  - normal requests query the latest-version view in the CTE and the main query
+  - `VersionAsOf` requests query `Core.<DataCategory>Version` in the CTE and
+    `TVF_Get<DataCategory>ByCreatedOn` in the main query
+  - the inner latest argument becomes the CTE reference-time predicate
+  - the main query adds `ReferenceTime = (SELECT MaxReferenceTimeBefore FROM
+    LatestReference)`
 - For timeseries, `LatestVersionWithCreatedOnView` and
   `LatestReferenceTimeWithCreatedOnView` fall back to the normal timeseries
   view names. This mirrors the C# `MdoMapping` property behavior.
@@ -491,6 +498,15 @@ Current behavior:
   - `[n,last]` -> `rank >= n`
   - `[n,m]` -> `rank >= n AND rank <= m`
 - order columns come from mapping priority when present
+- shape filters are normalized and emitted as CMDP-only predicates against
+  `DeliveryStart`, matching C# `ShapeNormalizer` and
+  `SqlShapePredicateBuilder`
+- shape month filters use `DATEPART(MONTH, DeliveryStart) IN (...)`
+- shape day filters use the C# ISO weekday expression based on
+  `DATEDIFF(DAY, '19000101', DeliveryStart)`
+- shape time filters use `CAST(DeliveryStart AS time)` half-open ranges
+- shape delivery-start expressions use `filterTimeZone`; non-UTC zones are
+  translated to SQL Server `AT TIME ZONE`
 
 Rank-over validation follows the C# API:
 
@@ -504,8 +520,6 @@ Rank-over validation follows the C# API:
 CMDP still needs careful parity testing for:
 
 - `latest(...)` CTE behavior
-- aggregation SQL
-- shape filters
 - delivery/RDP filter combinations
 
 ## Cassandra Query Rules
@@ -584,6 +598,47 @@ Remaining high-risk transformation areas:
   bucket cases
 - shape-aware transformations
 
+## Shape Filters
+
+Shape filters are now carried as normalized domain data:
+
+```text
+domain.NormalizedShape
+  Months          []int
+  Days            []int
+  TimeSpans       []ShapeTimeSpan
+  HolidayCalendar *int
+```
+
+The Go normalizer follows the C# `ShapeNormalizer` behavior:
+
+- valid months are `Jan` through `Dec`, normalized to `1..12`
+- valid days are `Mon` through `Sun`, normalized to `1..7`
+- values are sorted after normalization
+- duplicate month/day entries are rejected
+- duplicate or overlapping time ranges are rejected
+- `T00:00:00` used as a time-range end means end-of-day
+- a full-day range emits no SQL time predicate
+- `holidayCalendar` is preserved but has no SQL behavior yet, matching the C#
+  `NormalizedShape` comment
+
+Shape validation and strategy behavior:
+
+- shape is only allowed for curves
+- shape is rejected for Hyperscale ids
+- shape forces CMDP strategy and disables hybrid CMDP/Cassandra split
+
+CMDP SQL generation adds active predicates to the normal `WHERE` clause:
+
+```sql
+DATEPART(MONTH, <DeliveryStart>) IN (...)
+((DATEDIFF(DAY, '19000101', <DeliveryStart>) % 7) + 1) IN (...)
+CAST(<DeliveryStart> AS time) >= ...
+```
+
+When `filters.filterTimeZone` is non-UTC, `<DeliveryStart>` is wrapped with SQL
+Server `AT TIME ZONE`, as in the C# implementation.
+
 ## Aggregations
 
 Aggregation requests are now represented explicitly in the Go domain command:
@@ -639,6 +694,9 @@ Hyperscale aggregation SQL uses the same output shape but:
 - reads values from JSON payload columns such as `CurveValue`
 - casts JSON values based on mapping datatype before aggregation
 - keeps the regular Hyperscale latest-version / TVF source selection rules
+- can carry the same Hyperscale `latest(...)` CTE predicate as standard
+  Hyperscale queries, although live C# parity still needs proof for aggregation
+  plus latest combinations
 
 Validation now rejects:
 
@@ -772,9 +830,12 @@ Implemented:
 - CMDP quote-index planning.
 - Cassandra quote-index planning.
 - CMDP SQL builder.
-- Hyperscale SQL builder with latest-reference-time and projection parity rules.
+- Hyperscale SQL builder with latest-reference-time, `latest(...)` CTE, and
+  projection parity rules.
 - Aggregation command model, validation, CMDP SQL, Hyperscale SQL, and CSV
   header generation.
+- Shape filter normalization, validation, CMDP strategy forcing, and CMDP SQL
+  predicate generation.
 - Cassandra query builder and repository.
 - CSV/generic/lite endpoints.
 - JSON, streaming JSON, and NDJSON transactional endpoints.
@@ -787,8 +848,11 @@ Known gaps / still needs parity work:
 
 - Aggregation end-to-end parity still needs live CMDP/Hyperscale proof with
   representative ids and expected C# result sets.
-- Full shape filter parity.
-- Full `latest(...)` CTE parity for Hyperscale and CMDP.
+- Shape filter end-to-end parity still needs live CMDP proof with representative
+  ids and expected C# result sets.
+- CMDP `latest(...)` CTE parity.
+- Hyperscale `latest(...)` end-to-end parity still needs live proof with
+  representative ids and expected C# result sets.
 - Mesap endpoint/data-source parity.
 - Data trace/migration endpoints if required by production consumers.
 - Application Insights exporter integration if required.

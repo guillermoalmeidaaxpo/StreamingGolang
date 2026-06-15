@@ -432,6 +432,7 @@ func commandsForRequest(requestContext RequestContext, request Request, mappings
 
 func newCommand(requestContext RequestContext, request Request, category domain.DataCategory, ids []domain.Identifier, mappings []Mapping) Command {
 	aggregations := aggregationsFromTransformations(request.Transformations)
+	shape := shapeFromFilters(request.Filters)
 	command := Command{
 		IDs:               append([]domain.Identifier(nil), ids...),
 		DataCategory:      category,
@@ -444,7 +445,8 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		TargetTimeZone:    targetTimeZone(request, aggregations != nil),
 		HasAggregations:   aggregations != nil,
 		Aggregations:      aggregations,
-		HasShape:          request.Filters != nil && len(request.Filters.Shape) > 0,
+		HasShape:          shape != nil,
+		Shape:             shape,
 		Mappings:          append([]Mapping(nil), mappings...),
 	}
 	if request.Filters != nil {
@@ -454,6 +456,17 @@ func newCommand(requestContext RequestContext, request Request, category domain.
 		}
 	}
 	return command
+}
+
+func shapeFromFilters(filters *Filters) *domain.NormalizedShape {
+	if filters == nil || len(filters.Shape) == 0 {
+		return nil
+	}
+	shape, err := normalizeShape(filters.Shape)
+	if err != nil {
+		return nil
+	}
+	return shape
 }
 
 func projectionColumnsForRequest(requested []string, mappings []Mapping, isCSVEndpoint bool, aggregations *domain.Aggregations) []string {

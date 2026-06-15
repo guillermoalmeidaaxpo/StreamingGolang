@@ -15,12 +15,25 @@ type Command struct {
 	HasAggregations     bool
 	Aggregations        *Aggregations
 	HasShape            bool
+	Shape               *NormalizedShape
 	LatestReferenceTime bool
 	Filters             FilterSet
 	Mappings            []Mapping
 	Source              SourceKind
 	QuoteIndices        []int
 	IndexRange          *IndexRange
+}
+
+type NormalizedShape struct {
+	Months          []int
+	Days            []int
+	TimeSpans       []ShapeTimeSpan
+	HolidayCalendar *int
+}
+
+type ShapeTimeSpan struct {
+	StartSeconds int
+	EndSeconds   int
 }
 
 type Aggregations struct {

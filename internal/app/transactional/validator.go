@@ -56,12 +56,23 @@ func (requestValidator) Validate(_ context.Context, requests []Request) error {
 		if err := validateFilters(request.Filters); err != nil {
 			return err
 		}
+		if err := validateShapePayload(request.Filters); err != nil {
+			return err
+		}
 		if err := validateTransformations(request.Transformations); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func validateShapePayload(filters *Filters) error {
+	if filters == nil || len(filters.Shape) == 0 {
+		return nil
+	}
+	_, err := normalizeShape(filters.Shape)
+	return err
 }
 
 func validateColumns(columns []string) error {

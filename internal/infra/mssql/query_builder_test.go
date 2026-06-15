@@ -263,6 +263,56 @@ func TestCMDPQueryBuilderBuildsAggregationStatementLikeCSharp(t *testing.T) {
 	assertContains(t, statement, "ORDER BY [d].[QuoteTime], CAST(DATEADD(HOUR, (DATEDIFF(HOUR, '20000101', [d].[AdjustedDeliveryStartDate]) / 1) * 1, '20000101') AS datetimeoffset)")
 }
 
+func TestCMDPQueryBuilderAddsShapePredicatesLikeCSharp(t *testing.T) {
+	queryBuilder := NewCMDPQueryBuilder()
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory:   domain.Curves,
+		FilterTimeZone: "Europe/Zurich",
+		HasShape:       true,
+		Shape: &domain.NormalizedShape{
+			Months:    []int{1, 3},
+			Days:      []int{1, 7},
+			TimeSpans: []domain.ShapeTimeSpan{{StartSeconds: 8 * 3600, EndSeconds: 10 * 3600}},
+		},
+		Mappings: []domain.Mapping{{
+			ID:           536013751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceCMDP,
+			ViewName:     "ACCESS.Data_PriceModelled",
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "QuoteTime", IsKey: true, IsProjectable: true},
+				{MDSName: "DeliveryStart", SourceName: "AdjustedDeliveryStartDate", IsKey: true, IsProjectable: true},
+				{MDSName: "Value", SourceName: "Value", IsProjectable: true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	deliveryExpression := "[d].[AdjustedDeliveryStartDate] AT TIME ZONE 'W. Europe Standard Time'"
+	assertContains(t, statement, "DATEPART(MONTH, "+deliveryExpression+") IN (@month0, @month1)")
+	assertContains(t, statement, "((DATEDIFF(DAY, '19000101', "+deliveryExpression+") % 7) + 1) IN (@day0, @day1)")
+	assertContains(t, statement, "(CAST("+deliveryExpression+" AS time) >= @t0_start AND CAST("+deliveryExpression+" AS time) < @t0_end)")
+	if got := queries[0].Parameters["month0"]; got != 1 {
+		t.Fatalf("month0 = %#v, want 1", got)
+	}
+	if got := queries[0].Parameters["day1"]; got != 7 {
+		t.Fatalf("day1 = %#v, want 7", got)
+	}
+	if got := queries[0].Parameters["t0_start"]; got != "08:00:00" {
+		t.Fatalf("t0_start = %#v, want 08:00:00", got)
+	}
+	if got := queries[0].Parameters["t0_end"]; got != "10:00:00" {
+		t.Fatalf("t0_end = %#v, want 10:00:00", got)
+	}
+}
+
 func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	queryBuilder := NewHyperscaleQueryBuilder()
 	keyOrder := 1
@@ -311,6 +361,128 @@ func TestHyperscaleQueryBuilderBuildsStatementFromMDSMappings(t *testing.T) {
 	}
 	if queries[0].Parameters["id"] != int64(488109751) {
 		t.Fatalf("id parameter = %#v", queries[0].Parameters["id"])
+	}
+}
+
+func TestHyperscaleQueryBuilderBuildsLatestReferenceCTELikeCSharp(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	keyOrder := 1
+	valueOrder := 1
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory: domain.Curves,
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: "=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValueLatest,
+					Raw:  "latest(ReferenceTime > 2024-01-01T00:00:00Z)",
+					Arguments: []domain.LatestExpression{{
+						Field:    "ReferenceTime",
+						Operator: ">",
+						Value: domain.FilterValue{
+							Kind: domain.FilterValuePointInTime,
+							Raw:  "2024-01-01T00:00:00Z",
+						},
+					}},
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           488109751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceHyperscale,
+			Views: domain.MappingViews{
+				LatestVersion: "Api.VI_CurveLatestVersion",
+			},
+			Columns: []domain.ColumnMapping{
+				{MDSName: "Identifier", SourceName: "Identifier", IsKey: true, KeyColumnOrdering: &keyOrder},
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true, ValueColumnOrdering: &valueOrder},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "WITH [LatestReference] AS (SELECT MAX([ReferenceTime]) AS [MaxReferenceTimeBefore] FROM [Api].[VI_CurveLatestVersion]")
+	assertContains(t, statement, "WHERE [ReferenceTime] > @latestReferenceTime AND [MdoId] = @id")
+	assertContains(t, statement, "SELECT [d].[ReferenceTime], CAST(JSON_VALUE([d].[CurveValue], '$.\"Value\"') AS FLOAT) AS [Value]")
+	assertContains(t, statement, "FROM [Api].[VI_CurveLatestVersion] AS [d]")
+	assertContains(t, statement, "[d].[MdoId] = @id")
+	assertContains(t, statement, "[d].[Deleted] = 0")
+	assertContains(t, statement, "[d].[ReferenceTime] = (SELECT [MaxReferenceTimeBefore] FROM [LatestReference])")
+
+	if got, want := queries[0].Parameters["latestReferenceTime"], time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC); got != want {
+		t.Fatalf("latestReferenceTime = %#v, want %#v", got, want)
+	}
+}
+
+func TestHyperscaleQueryBuilderBuildsVersionAsOfLatestReferenceCTELikeCSharp(t *testing.T) {
+	queryBuilder := NewHyperscaleQueryBuilder()
+	versionAsOf := time.Date(2025, 5, 5, 7, 0, 0, 0, time.UTC)
+
+	queries, err := queryBuilder.BuildQueries(context.Background(), domain.Command{
+		DataCategory: domain.Curves,
+		VersionAsOf:  &versionAsOf,
+		Filters: domain.FilterSet{Nodes: []domain.FilterNode{
+			domain.ComparisonFilter{
+				Field:    "ReferenceTime",
+				Operator: "=",
+				Value: domain.FilterValue{
+					Kind: domain.FilterValueLatest,
+					Raw:  "latest(ReferenceTime <= 2024-01-01T00:00:00Z)",
+					Arguments: []domain.LatestExpression{{
+						Field:    "ReferenceTime",
+						Operator: "<=",
+						Value: domain.FilterValue{
+							Kind: domain.FilterValuePointInTime,
+							Raw:  "2024-01-01T00:00:00Z",
+						},
+					}},
+				},
+			},
+		}},
+		Mappings: []domain.Mapping{{
+			ID:           488109751,
+			DataCategory: domain.Curves,
+			Source:       domain.SourceHyperscale,
+			Views: domain.MappingViews{
+				LatestVersion:  "Api.VI_CurveLatestVersion",
+				GetByCreatedOn: "Api.TVF_GetCurveByCreatedOn",
+			},
+			Columns: []domain.ColumnMapping{
+				{MDSName: "ReferenceTime", SourceName: "ReferenceTime", IsKey: true},
+				{MDSName: "Value", SourceName: "Value", DataType: "number", IsProjectable: true},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build queries failed: %v", err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(queries))
+	}
+
+	statement := queries[0].Statement
+	assertContains(t, statement, "WITH [LatestReference] AS (SELECT TOP 1 [ReferenceTime] AS [MaxReferenceTimeBefore]")
+	assertContains(t, statement, "FROM [Core].[CurveVersion]")
+	assertContains(t, statement, "WHERE [CreatedOn] <= @CreatedOn AND [MdoId] = @MdoId AND [ReferenceTime] <= @latestReferenceTime")
+	assertContains(t, statement, "GROUP BY [ReferenceTime]) AS [VersionedRefs] ORDER BY [ReferenceTime] DESC)")
+	assertContains(t, statement, "FROM [Api].[TVF_GetCurveByCreatedOn](@MdoId, @CreatedOn, @IncludeDeleted) AS [d]")
+	assertContains(t, statement, "[d].[ReferenceTime] = (SELECT [MaxReferenceTimeBefore] FROM [LatestReference])")
+
+	if got, want := queries[0].Parameters["latestReferenceTime"], time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC); got != want {
+		t.Fatalf("latestReferenceTime = %#v, want %#v", got, want)
+	}
+	if queries[0].Parameters["CreatedOn"] != versionAsOf {
+		t.Fatalf("CreatedOn parameter = %#v", queries[0].Parameters["CreatedOn"])
 	}
 }
 

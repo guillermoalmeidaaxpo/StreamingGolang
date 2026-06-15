@@ -42,7 +42,7 @@ func (CMDPQueryBuilder) BuildQueries(_ context.Context, command domain.Command) 
 			continue
 		}
 
-		statement, parameters, err := buildCMDPStatement(mapping, command.Filters, command.IndexRange, command.Columns, command.Aggregations, command.TargetTimeZone)
+		statement, parameters, err := buildCMDPStatement(mapping, command.Filters, command.IndexRange, command.Columns, command.Aggregations, command.TargetTimeZone, command.FilterTimeZone, command.Shape)
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +103,7 @@ func dataCategoryForQuery(commandCategory domain.DataCategory, mapping domain.Ma
 	return commandCategory
 }
 
-func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexRange *domain.IndexRange, requestedColumns []string, aggregations *domain.Aggregations, targetTimeZone string) (string, map[string]any, error) {
+func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexRange *domain.IndexRange, requestedColumns []string, aggregations *domain.Aggregations, targetTimeZone string, filterTimeZone string, shape *domain.NormalizedShape) (string, map[string]any, error) {
 	if strings.TrimSpace(mapping.ViewName) == "" {
 		return "", nil, apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no CMDP view name", mapping.ID))
 	}
@@ -120,6 +120,11 @@ func buildCMDPStatement(mapping domain.Mapping, filters domain.FilterSet, indexR
 		return "", nil, err
 	}
 	where = append(where, filterPredicates...)
+	shapePredicates, err := builder.shapePredicates(shape, filterTimeZone)
+	if err != nil {
+		return "", nil, err
+	}
+	where = append(where, shapePredicates...)
 	if indexRange != nil && strings.TrimSpace(mapping.IndexField) != "" {
 		builder.addParameter("indexStart", indexRange.Start)
 		builder.addParameter("indexEnd", indexRange.End)
@@ -167,6 +172,7 @@ func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, 
 		parameters:      make(map[string]any),
 		jsonValueColumn: valueColumn,
 	}
+	latestFilter, hasLatestFilter := singleLatestFilter(filters.Nodes)
 
 	from := quoteTable(viewName)
 	where := make([]string, 0)
@@ -183,14 +189,27 @@ func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, 
 		}
 	}
 
-	filterPredicates, err := builder.filterPredicates(filters.Nodes)
+	filterPredicates, err := builder.hyperscaleFilterPredicates(filters.Nodes)
 	if err != nil {
 		return "", nil, err
 	}
 	where = append(where, filterPredicates...)
+	cte := ""
+	if hasLatestFilter {
+		var latestPredicate string
+		cte, latestPredicate, err = builder.latestReferenceCTE(mapping, latestFilter, versionAsOf)
+		if err != nil {
+			return "", nil, err
+		}
+		where = append(where, latestPredicate)
+	}
 
 	if aggregations != nil {
-		return builder.aggregationStatement(mapping, aggregations, requestedColumns, targetTimeZone, from, where, true)
+		statement, parameters, err := builder.aggregationStatement(mapping, aggregations, requestedColumns, targetTimeZone, from, where, true)
+		if err != nil {
+			return "", nil, err
+		}
+		return cte + statement, parameters, nil
 	}
 
 	statement := fmt.Sprintf("SELECT %s FROM %s AS [d]",
@@ -204,7 +223,7 @@ func buildHyperscaleStatement(mapping domain.Mapping, filters domain.FilterSet, 
 	if order := hyperscaleOrderColumns(mapping.Columns, valueColumn, includeIdentifier, latestReferenceTime); len(order) > 0 {
 		statement += " ORDER BY " + strings.Join(order, ", ")
 	}
-	return statement, builder.parameters, nil
+	return cte + statement, builder.parameters, nil
 }
 
 type sqlBuilder struct {
@@ -231,6 +250,153 @@ func (b *sqlBuilder) filterPredicates(nodes []domain.FilterNode) ([]string, erro
 		}
 	}
 	return predicates, nil
+}
+
+func (b *sqlBuilder) hyperscaleFilterPredicates(nodes []domain.FilterNode) ([]string, error) {
+	predicates := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		switch filter := node.(type) {
+		case domain.ComparisonFilter:
+			if filter.Value.Kind == domain.FilterValueLatest {
+				continue
+			}
+			predicate, err := b.comparisonPredicate(filter)
+			if err != nil {
+				return nil, err
+			}
+			if predicate != "" {
+				predicates = append(predicates, predicate)
+			}
+		case domain.RankOverFilter:
+			continue
+		}
+	}
+	return predicates, nil
+}
+
+func (b *sqlBuilder) latestReferenceCTE(mapping domain.Mapping, filter domain.ComparisonFilter, versionAsOf *time.Time) (string, string, error) {
+	if len(filter.Value.Arguments) != 1 {
+		return "", "", apperr.New(apperr.Invalid, "latest filter requires one reference-time argument")
+	}
+	argument := filter.Value.Arguments[0]
+	if !strings.EqualFold(argument.Field, "ReferenceTime") {
+		return "", "", apperr.New(apperr.Invalid, "latest filter only supports ReferenceTime arguments")
+	}
+	if !isComparisonOperator(argument.Operator) {
+		return "", "", apperr.New(apperr.Invalid, fmt.Sprintf("unsupported latest filter operator %q", argument.Operator))
+	}
+	value, err := sqlScalarValue(argument.Value)
+	if err != nil {
+		return "", "", err
+	}
+	b.addParameter("latestReferenceTime", value)
+
+	predicate := fmt.Sprintf("%s = (SELECT [MaxReferenceTimeBefore] FROM [LatestReference])", qualify("ReferenceTime"))
+	if versionAsOf != nil {
+		tableName, err := hyperscaleVersionTableName(mapping)
+		if err != nil {
+			return "", "", err
+		}
+		cte := fmt.Sprintf("WITH [LatestReference] AS (SELECT TOP 1 [ReferenceTime] AS [MaxReferenceTimeBefore] FROM (SELECT [ReferenceTime], MAX([CreatedOn]) AS [CreatedOn] FROM %s WHERE [CreatedOn] <= @CreatedOn AND [MdoId] = @MdoId AND [ReferenceTime] %s @latestReferenceTime GROUP BY [ReferenceTime]) AS [VersionedRefs] ORDER BY [ReferenceTime] DESC) ",
+			quoteTable("Core."+tableName+"Version"),
+			argument.Operator,
+		)
+		return cte, predicate, nil
+	}
+
+	viewName := firstNonEmpty(mapping.Views.LatestVersion, defaultHyperscaleLatestVersionView(mapping.DataCategory))
+	if strings.TrimSpace(viewName) == "" {
+		return "", "", apperr.New(apperr.Invalid, fmt.Sprintf("mapping %d has no hyperscale latest-version view for latest filter", mapping.ID))
+	}
+	cte := fmt.Sprintf("WITH [LatestReference] AS (SELECT MAX([ReferenceTime]) AS [MaxReferenceTimeBefore] FROM %s WHERE [ReferenceTime] %s @latestReferenceTime AND [MdoId] = @id) ",
+		quoteTable(viewName),
+		argument.Operator,
+	)
+	return cte, predicate, nil
+}
+
+func (b *sqlBuilder) shapePredicates(shape *domain.NormalizedShape, filterTimeZone string) ([]string, error) {
+	if shape == nil {
+		return nil, nil
+	}
+	deliveryStart, ok := b.columnByMDSName("DeliveryStart")
+	if !ok {
+		return nil, apperr.New(apperr.Invalid, "shape filter requires a mapped DeliveryStart column")
+	}
+	deliveryStartExpression := b.shapeDeliveryStartExpression(deliveryStart, filterTimeZone)
+	predicates := make([]string, 0, 3)
+
+	if len(shape.Months) > 0 && len(shape.Months) < 12 {
+		params := make([]string, 0, len(shape.Months))
+		for i, month := range shape.Months {
+			name := fmt.Sprintf("month%d", i)
+			b.addParameter(name, month)
+			params = append(params, "@"+name)
+		}
+		predicates = append(predicates, fmt.Sprintf("DATEPART(MONTH, %s) IN (%s)", deliveryStartExpression, strings.Join(params, ", ")))
+	}
+
+	if len(shape.Days) > 0 && len(shape.Days) < 7 {
+		params := make([]string, 0, len(shape.Days))
+		for i, day := range shape.Days {
+			name := fmt.Sprintf("day%d", i)
+			b.addParameter(name, day)
+			params = append(params, "@"+name)
+		}
+		predicates = append(predicates, fmt.Sprintf("((DATEDIFF(DAY, '19000101', %s) %% 7) + 1) IN (%s)", deliveryStartExpression, strings.Join(params, ", ")))
+	}
+
+	if len(shape.TimeSpans) > 0 && !shapeCoversFullDay(shape.TimeSpans) {
+		fragments := make([]string, 0, len(shape.TimeSpans))
+		for i, span := range shape.TimeSpans {
+			startName := fmt.Sprintf("t%d_start", i)
+			b.addParameter(startName, sqlShapeTime(span.StartSeconds))
+			if span.EndSeconds == 24*3600 {
+				fragments = append(fragments, fmt.Sprintf("(CAST(%s AS time) >= @%s)", deliveryStartExpression, startName))
+				continue
+			}
+			endName := fmt.Sprintf("t%d_end", i)
+			b.addParameter(endName, sqlShapeTime(span.EndSeconds))
+			fragments = append(fragments, fmt.Sprintf("(CAST(%s AS time) >= @%s AND CAST(%s AS time) < @%s)", deliveryStartExpression, startName, deliveryStartExpression, endName))
+		}
+		predicates = append(predicates, "("+strings.Join(fragments, " OR ")+")")
+	}
+
+	return predicates, nil
+}
+
+func (b *sqlBuilder) shapeDeliveryStartExpression(column domain.ColumnMapping, filterTimeZone string) string {
+	expression := b.columnExpression(column)
+	if strings.TrimSpace(filterTimeZone) == "" || isUTCTimeZone(filterTimeZone) {
+		return expression
+	}
+	return fmt.Sprintf("%s AT TIME ZONE '%s'", expression, sqlServerTimeZone(filterTimeZone))
+}
+
+func shapeCoversFullDay(spans []domain.ShapeTimeSpan) bool {
+	if len(spans) != 1 {
+		return false
+	}
+	return spans[0].StartSeconds == 0 && spans[0].EndSeconds == 24*3600
+}
+
+func sqlShapeTime(seconds int) string {
+	if seconds == 24*3600 {
+		return "00:00:00"
+	}
+	hour := seconds / 3600
+	minute := (seconds % 3600) / 60
+	second := seconds % 60
+	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
+}
+
+func isUTCTimeZone(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "utc", "z", "etc/utc":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *sqlBuilder) rankOverStatement(mapping domain.Mapping, filter domain.RankOverFilter, requestedColumns []string, where []string) (string, map[string]any, error) {
@@ -1053,6 +1219,19 @@ func singleRankOverFilter(nodes []domain.FilterNode) (domain.RankOverFilter, boo
 	return domain.RankOverFilter{}, false
 }
 
+func singleLatestFilter(nodes []domain.FilterNode) (domain.ComparisonFilter, bool) {
+	for _, node := range nodes {
+		filter, ok := node.(domain.ComparisonFilter)
+		if !ok {
+			continue
+		}
+		if filter.Value.Kind == domain.FilterValueLatest {
+			return filter, true
+		}
+	}
+	return domain.ComparisonFilter{}, false
+}
+
 func hasRankOverFilters(nodes []domain.FilterNode) bool {
 	_, ok := singleRankOverFilter(nodes)
 	return ok
@@ -1258,6 +1437,26 @@ func hyperscaleCategoryName(category domain.DataCategory) (string, bool) {
 	}
 }
 
+func hyperscaleVersionTableName(mapping domain.Mapping) (string, error) {
+	viewName := firstNonEmpty(mapping.Views.LatestVersion, defaultHyperscaleLatestVersionView(mapping.DataCategory))
+	for _, token := range strings.Split(viewName, ".") {
+		token = strings.Trim(token, "[] ")
+		if strings.HasPrefix(token, "VI_") {
+			token = strings.TrimPrefix(token, "VI_")
+		}
+		if strings.HasSuffix(token, "LatestVersion") {
+			token = strings.TrimSuffix(token, "LatestVersion")
+			if token != "" {
+				return token, nil
+			}
+		}
+	}
+	if name, ok := hyperscaleCategoryName(mapping.DataCategory); ok {
+		return name, nil
+	}
+	return "", apperr.New(apperr.Invalid, fmt.Sprintf("cannot infer hyperscale version table for data category %q", mapping.DataCategory))
+}
+
 func hyperscaleValueColumn(category domain.DataCategory) (string, error) {
 	switch category {
 	case domain.Curves:
@@ -1398,6 +1597,12 @@ func sqlIntervalPointTime(raw string) (time.Time, bool, error) {
 
 func parseSQLPointTime(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		parsed, err := time.Parse(layout, raw)
+		if err == nil {
+			return parsed, nil
+		}
+	}
 	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
 		parsed, err := time.ParseInLocation(layout, raw, time.UTC)
 		if err == nil {
