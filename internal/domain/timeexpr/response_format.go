@@ -2,10 +2,10 @@ package timeexpr
 
 import "time"
 
-const ResponseDateTimeOffsetLayout = "2006-01-02T15:04:05.000-07:00"
+const ResponseDateTimeLayout = "2006-01-02T15:04:05.000"
 
 func FormatResponseTime(value time.Time) string {
-	return value.Format(ResponseDateTimeOffsetLayout)
+	return value.Format(ResponseDateTimeLayout)
 }
 
 func FormatResponseValue(value any) any {

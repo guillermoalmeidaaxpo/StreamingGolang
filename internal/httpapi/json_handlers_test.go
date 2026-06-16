@@ -120,8 +120,8 @@ func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 		t.Fatalf("Identifier = %#v, want 536013751", got)
 	}
 	referenceTimes, ok := batches[0]["ReferenceTime"].([]any)
-	if !ok || len(referenceTimes) != 2 || referenceTimes[0] != "2024-04-26T00:00:00.000+02:00" {
-		t.Fatalf("first batch ReferenceTime = %#v, want C# DateTimeOffset milliseconds", batches[0]["ReferenceTime"])
+	if !ok || len(referenceTimes) != 2 || referenceTimes[0] != "2024-04-26T00:00:00.000" {
+		t.Fatalf("first batch ReferenceTime = %#v, want C# local timestamp with milliseconds", batches[0]["ReferenceTime"])
 	}
 	values, ok := batches[0]["Value"].([]any)
 	if !ok || len(values) != 2 {
