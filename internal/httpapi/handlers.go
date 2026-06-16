@@ -95,24 +95,30 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 
 	writeStart := time.Now()
 	if acceptsNDJSON(r) {
-		if err := writeTransactionalNDJSONStream(r.Context(), w, r, stream, h.streamFlushEvery); err != nil && !errors.Is(err, r.Context().Err()) {
+		stats, err := writeTransactionalNDJSONStream(r.Context(), w, r, stream, h.streamFlushEvery)
+		if err != nil && !errors.Is(err, r.Context().Err()) {
 			return
 		}
 		h.logPhase(r, "response written", writeStart,
 			slog.String("handler", "transactional_stream"),
 			slog.String("format", "ndjson"),
 			slog.Int("stream_batch_size", normalizeStreamFlushEvery(h.streamFlushEvery)),
+			slog.Int("row_count", stats.Rows),
+			slog.Int("batch_count", stats.Batches),
 		)
 		return
 	}
 
-	if err := writeTransactionalJSONStream(r.Context(), w, r, stream, h.streamFlushEvery); err != nil && !errors.Is(err, r.Context().Err()) {
+	stats, err := writeTransactionalJSONStream(r.Context(), w, r, stream, h.streamFlushEvery)
+	if err != nil && !errors.Is(err, r.Context().Err()) {
 		return
 	}
 	h.logPhase(r, "response written", writeStart,
 		slog.String("handler", "transactional_stream"),
 		slog.String("format", "json_stream"),
 		slog.Int("stream_batch_size", normalizeStreamFlushEvery(h.streamFlushEvery)),
+		slog.Int("row_count", stats.Rows),
+		slog.Int("batch_count", stats.Batches),
 	)
 }
 

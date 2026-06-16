@@ -199,6 +199,9 @@ Endpoint behavior:
   batch has scalar `Identifier` plus one array per returned column, and each
   array contains up to `stream_batch_size` row values. JSON streaming returns an
   array of these batch objects; NDJSON writes one batch object per line.
+- Streaming response logs include both physical `row_count` and emitted
+  `batch_count`. Compare `batch_count` with other implementations that log
+  "items sent" for column-wise stream batches.
 - CSV streaming flushes rows using the same `execution.stream_batch_size`
   setting. The default value is `1000` and can be overridden with
   `OUTBOUND_EXECUTION_STREAM_BATCH_SIZE`.
@@ -564,9 +567,9 @@ Current behavior:
   `LegacyDeliveryBucketNumber`, `RelativeDeliveryPeriod`, and `Value`
 - transforms Cassandra `ReferenceTime` to midnight in the Cassandra mapping
   timezone such as `Europe/Zurich` before response serialization
-- formats JSON/NDJSON timestamp values like the C# response contract: local
-  timestamp string with millisecond precision and no offset, for example
-  `2024-04-26T00:00:00.000`
+- formats JSON/NDJSON timestamp values like the C# response contract:
+  `DateTimeOffset` strings with millisecond precision and offset, for example
+  `2024-04-26T00:00:00.000+02:00`
 - calculates `RelativeDeliveryPeriod` in the Go transformation layer for
   Cassandra streams and non-stream responses, even when the client projected a
   smaller set of columns
@@ -626,13 +629,16 @@ Current Go transformation support includes:
 
 C# behavior to preserve:
 
+- Transactional JSON, streaming JSON, and NDJSON include `DateTimeOffset`
+  offsets by default.
 - Generic CSV defaults `Offset=false`.
 - Generic CSV defaults target timezone to `UTC` when there is no aggregation,
   no explicit target timezone, and offset is false.
+- Generic CSV includes offsets only when the generic transformation explicitly
+  requests `offset=true`.
 - Aggregations default target timezone to UTC when no target timezone is given.
 - Aggregation keys normalize `Delivery` to `DeliveryStart`, matching the C#
   `AggregationExpressionHelper`.
-- JSON and streaming JSON include offsets by default.
 
 Remaining high-risk transformation areas:
 

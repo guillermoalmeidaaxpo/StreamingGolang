@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,15 +22,21 @@ func acceptsNDJSON(r *http.Request) bool {
 	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), ndjsonContentType)
 }
 
-func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) error {
+type streamWriteStats struct {
+	Rows    int
+	Batches int
+}
+
+func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) (streamWriteStats, error) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	flushEvery = normalizeStreamFlushEvery(flushEvery)
+	setStreamBatchHeaders(w, flushEvery)
 
 	flusher, _ := w.(http.Flusher)
 	encoder := json.NewEncoder(w)
 
 	if _, err := w.Write([]byte("[")); err != nil {
-		return err
+		return streamWriteStats{}, err
 	}
 	if flusher != nil {
 		flusher.Flush()
@@ -42,7 +49,7 @@ func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r 
 		item := stream.Item()
 		if !batch.canAdd(item) {
 			if err := writeJSONStreamBatch(w, encoder, flusher, batch, &batchIndex); err != nil {
-				return err
+				return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 			}
 			batch.reset()
 		}
@@ -50,24 +57,24 @@ func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r 
 		rowIndex++
 		if batch.full() {
 			if err := writeJSONStreamBatch(w, encoder, flusher, batch, &batchIndex); err != nil {
-				return err
+				return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 			}
 			batch.reset()
 		}
 	}
 
 	if err := writeJSONStreamBatch(w, encoder, flusher, batch, &batchIndex); err != nil {
-		return err
+		return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 	}
 
 	if err := stream.Err(); err != nil {
 		if batchIndex > 0 {
 			if _, writeErr := w.Write([]byte(",")); writeErr != nil {
-				return writeErr
+				return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, writeErr
 			}
 		}
 		if encodeErr := encoder.Encode(streamErrorObject(err.Error(), rowIndex+1, r, "JSON")); encodeErr != nil {
-			return encodeErr
+			return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, encodeErr
 		}
 	}
 
@@ -75,50 +82,52 @@ func writeTransactionalJSONStream(ctx context.Context, w http.ResponseWriter, r 
 	if flusher != nil {
 		flusher.Flush()
 	}
-	return err
+	return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 }
 
-func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) error {
+func writeTransactionalNDJSONStream(ctx context.Context, w http.ResponseWriter, r *http.Request, stream transactional.Stream, flushEvery int) (streamWriteStats, error) {
 	w.Header().Set("Content-Type", ndjsonContentType)
 	flushEvery = normalizeStreamFlushEvery(flushEvery)
+	setStreamBatchHeaders(w, flushEvery)
 
 	encoder := json.NewEncoder(w)
 	flusher, _ := w.(http.Flusher)
 
 	rowIndex := 0
+	batchIndex := 0
 	batch := newColumnBatch(flushEvery)
 	for stream.Next(ctx) {
 		item := stream.Item()
 		if !batch.canAdd(item) {
-			if err := writeNDJSONStreamBatch(encoder, flusher, batch); err != nil {
-				return err
+			if err := writeNDJSONStreamBatch(encoder, flusher, batch, &batchIndex); err != nil {
+				return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 			}
 			batch.reset()
 		}
 		batch.add(item)
 		rowIndex++
 		if batch.full() {
-			if err := writeNDJSONStreamBatch(encoder, flusher, batch); err != nil {
-				return err
+			if err := writeNDJSONStreamBatch(encoder, flusher, batch, &batchIndex); err != nil {
+				return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 			}
 			batch.reset()
 		}
 	}
 
-	if err := writeNDJSONStreamBatch(encoder, flusher, batch); err != nil {
-		return err
+	if err := writeNDJSONStreamBatch(encoder, flusher, batch, &batchIndex); err != nil {
+		return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, err
 	}
 
 	if err := stream.Err(); err != nil {
 		if encodeErr := encoder.Encode(streamErrorObject(err.Error(), rowIndex+1, r, "NDJSON")); encodeErr != nil {
-			return encodeErr
+			return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, encodeErr
 		}
 		if flusher != nil {
 			flusher.Flush()
 		}
 	}
 
-	return nil
+	return streamWriteStats{Rows: rowIndex, Batches: batchIndex}, nil
 }
 
 func normalizeStreamFlushEvery(value int) int {
@@ -126,6 +135,11 @@ func normalizeStreamFlushEvery(value int) int {
 		return defaultStreamFlushEvery
 	}
 	return value
+}
+
+func setStreamBatchHeaders(w http.ResponseWriter, batchSize int) {
+	w.Header().Set("X-Stream-Shape", "column-batch")
+	w.Header().Set("X-Stream-Batch-Size", strconv.Itoa(batchSize))
 }
 
 func streamErrorObject(message string, itemIndex int, r *http.Request, streamFormat string) map[string]any {
@@ -231,13 +245,14 @@ func writeJSONStreamBatch(w http.ResponseWriter, encoder *json.Encoder, flusher 
 	return nil
 }
 
-func writeNDJSONStreamBatch(encoder *json.Encoder, flusher http.Flusher, batch *columnBatch) error {
+func writeNDJSONStreamBatch(encoder *json.Encoder, flusher http.Flusher, batch *columnBatch, batchIndex *int) error {
 	if batch.empty() {
 		return nil
 	}
 	if err := encoder.Encode(batch.object()); err != nil {
 		return err
 	}
+	(*batchIndex)++
 	if flusher != nil {
 		flusher.Flush()
 	}

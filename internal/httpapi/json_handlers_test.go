@@ -105,8 +105,12 @@ func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
 	rec := httptest.NewRecorder()
 
-	if err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 2); err != nil {
+	stats, err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 2)
+	if err != nil {
 		t.Fatalf("write stream: %v", err)
+	}
+	if stats.Rows != 3 || stats.Batches != 2 {
+		t.Fatalf("stats = %+v, want 3 rows and 2 batches", stats)
 	}
 
 	var batches []map[string]any
@@ -120,8 +124,8 @@ func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 		t.Fatalf("Identifier = %#v, want 536013751", got)
 	}
 	referenceTimes, ok := batches[0]["ReferenceTime"].([]any)
-	if !ok || len(referenceTimes) != 2 || referenceTimes[0] != "2024-04-26T00:00:00.000" {
-		t.Fatalf("first batch ReferenceTime = %#v, want C# local timestamp with milliseconds", batches[0]["ReferenceTime"])
+	if !ok || len(referenceTimes) != 2 || referenceTimes[0] != "2024-04-26T00:00:00.000+02:00" {
+		t.Fatalf("first batch ReferenceTime = %#v, want C# DateTimeOffset with milliseconds", batches[0]["ReferenceTime"])
 	}
 	values, ok := batches[0]["Value"].([]any)
 	if !ok || len(values) != 2 {
@@ -142,8 +146,12 @@ func TestTransactionalNDJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
 	rec := httptest.NewRecorder()
 
-	if err := writeTransactionalNDJSONStream(context.Background(), rec, req, stream, 2); err != nil {
+	stats, err := writeTransactionalNDJSONStream(context.Background(), rec, req, stream, 2)
+	if err != nil {
 		t.Fatalf("write stream: %v", err)
+	}
+	if stats.Rows != 3 || stats.Batches != 2 {
+		t.Fatalf("stats = %+v, want 3 rows and 2 batches", stats)
 	}
 
 	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
@@ -177,8 +185,12 @@ func TestTransactionalJSONStreamStartsNewBatchWhenIdentifierChanges(t *testing.T
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
 	rec := httptest.NewRecorder()
 
-	if err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 1000); err != nil {
+	stats, err := writeTransactionalJSONStream(context.Background(), rec, req, stream, 1000)
+	if err != nil {
 		t.Fatalf("write stream: %v", err)
+	}
+	if stats.Rows != 2 || stats.Batches != 2 {
+		t.Fatalf("stats = %+v, want 2 rows and 2 batches", stats)
 	}
 
 	var batches []map[string]any

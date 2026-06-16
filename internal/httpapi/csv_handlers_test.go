@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"streaming-golang/internal/app/transactional"
 	"streaming-golang/internal/domain"
@@ -153,6 +154,51 @@ func TestCSVColumnsFromPlanUsesAggregationColumns(t *testing.T) {
 	want := []string{"Identifier", "ReferenceTime", "DeliveryBucket", "AverageValue"}
 	if strings.Join(columns, ",") != strings.Join(want, ",") {
 		t.Fatalf("columns = %#v, want %#v", columns, want)
+	}
+}
+
+func TestGenericCSVFormatsDateTimesWithoutOffsetByDefault(t *testing.T) {
+	zurich := time.FixedZone("CEST", 2*60*60)
+	response := transactional.Response{TransactionalData: []transactional.DataItem{{
+		ID: 536013751,
+		Fields: map[string]any{
+			"Identifier":    domain.Identifier(536013751),
+			"ReferenceTime": time.Date(2024, 4, 26, 0, 0, 0, 0, zurich),
+		},
+	}}}
+	rec := httptest.NewRecorder()
+
+	if err := writeTransactionalCSV(rec, response, []string{"Identifier", "ReferenceTime"}, false, true); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "536013751,2024-04-26T00:00:00.000") {
+		t.Fatalf("body = %q, want generic CSV timestamp without offset", body)
+	}
+	if strings.Contains(body, "+02:00") {
+		t.Fatalf("body = %q, generic CSV default must not include offset", body)
+	}
+}
+
+func TestGenericCSVFormatsDateTimesWithOffsetWhenRequested(t *testing.T) {
+	zurich := time.FixedZone("CEST", 2*60*60)
+	response := transactional.Response{TransactionalData: []transactional.DataItem{{
+		ID: 536013751,
+		Fields: map[string]any{
+			"Identifier":    domain.Identifier(536013751),
+			"ReferenceTime": time.Date(2024, 4, 26, 0, 0, 0, 0, zurich),
+		},
+	}}}
+	rec := httptest.NewRecorder()
+
+	if err := writeTransactionalCSV(rec, response, []string{"Identifier", "ReferenceTime"}, true, true); err != nil {
+		t.Fatalf("write csv: %v", err)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "536013751,2024-04-26T00:00:00.000+02:00") {
+		t.Fatalf("body = %q, want generic CSV timestamp with offset when requested", body)
 	}
 }
 
