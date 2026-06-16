@@ -193,16 +193,16 @@ func (s *cassandraStream) close() error {
 }
 
 func mapCassandraRow(row map[string]any, query domain.ExecutableQuery) map[string]any {
+	location := cassandraResponseLocation(query.Parameters)
+	deliveryStart := deliveryStartFromCassandra(row)
 	fields := map[string]any{
 		"Identifier":                 int64(query.ID),
-		"ReferenceTime":              referenceTimeFromCassandra(row, query.Parameters),
-		"DeliveryStart":              deliveryStartFromCassandra(row),
+		"ReferenceTime":              referenceTimeFromCassandra(row, location),
+		"DeliveryStart":              deliveryStart,
+		"DeliveryEnd":                deliveryEndFromCassandra(deliveryStart, location),
 		"RelativeDeliveryPeriod":     nil,
 		"Value":                      adaptiveRound(asFloat(row["value"])),
 		"LegacyDeliveryBucketNumber": nil,
-	}
-	if deliveryStart, ok := fields["DeliveryStart"].(time.Time); ok {
-		fields["DeliveryEnd"] = deliveryStart.Add(time.Hour)
 	}
 	return projectCassandraFields(fields, query.Parameters)
 }
@@ -249,8 +249,7 @@ func hasColumn(columns []string, name string) bool {
 	return false
 }
 
-func referenceTimeFromCassandra(row map[string]any, parameters map[string]any) time.Time {
-	location := cassandraResponseLocation(parameters)
+func referenceTimeFromCassandra(row map[string]any, location *time.Location) time.Time {
 	return time.Date(
 		asInt(row["qte_y"]),
 		time.Month(asInt(row["qte_m"])),
@@ -286,6 +285,20 @@ func deliveryStartFromCassandra(row map[string]any) time.Time {
 		0,
 		0,
 		offset,
+	)
+}
+
+func deliveryEndFromCassandra(deliveryStart time.Time, location *time.Location) time.Time {
+	local := deliveryStart.In(location)
+	return time.Date(
+		local.Year(),
+		local.Month(),
+		local.Day(),
+		local.Hour()+1,
+		local.Minute(),
+		local.Second(),
+		local.Nanosecond(),
+		location,
 	)
 }
 
