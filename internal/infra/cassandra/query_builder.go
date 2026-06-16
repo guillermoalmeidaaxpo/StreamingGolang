@@ -60,6 +60,7 @@ func (b *CassandraQueryBuilder) BuildQueries(_ context.Context, command domain.C
 			Arguments:    arguments,
 			Parameters: map[string]any{
 				"projection_columns": cassandraProjectionColumns(command.Columns),
+				"cassandra_timezone": mapping.Timezone,
 			},
 		})
 	}

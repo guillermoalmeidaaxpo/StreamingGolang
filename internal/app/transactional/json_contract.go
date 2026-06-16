@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 func (item DataItem) MarshalJSON() ([]byte, error) {
@@ -24,6 +25,7 @@ func (item DataItem) MarshalJSON() ([]byte, error) {
 }
 
 func jsonArrayValue(value any) any {
+	value = timeexpr.FormatResponseValue(value)
 	switch typed := value.(type) {
 	case nil:
 		return []any{nil}

@@ -13,6 +13,7 @@ import (
 	"streaming-golang/internal/app/apperr"
 	"streaming-golang/internal/app/transactional"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 type repository struct {
@@ -194,7 +195,7 @@ func (s *cassandraStream) close() error {
 func mapCassandraRow(row map[string]any, query domain.ExecutableQuery) map[string]any {
 	fields := map[string]any{
 		"Identifier":                 int64(query.ID),
-		"ReferenceTime":              referenceTimeFromCassandra(row),
+		"ReferenceTime":              referenceTimeFromCassandra(row, query.Parameters),
 		"DeliveryStart":              deliveryStartFromCassandra(row),
 		"RelativeDeliveryPeriod":     nil,
 		"Value":                      adaptiveRound(asFloat(row["value"])),
@@ -248,7 +249,8 @@ func hasColumn(columns []string, name string) bool {
 	return false
 }
 
-func referenceTimeFromCassandra(row map[string]any) time.Time {
+func referenceTimeFromCassandra(row map[string]any, parameters map[string]any) time.Time {
+	location := cassandraResponseLocation(parameters)
 	return time.Date(
 		asInt(row["qte_y"]),
 		time.Month(asInt(row["qte_m"])),
@@ -257,8 +259,20 @@ func referenceTimeFromCassandra(row map[string]any) time.Time {
 		0,
 		0,
 		0,
-		time.UTC,
+		location,
 	)
+}
+
+func cassandraResponseLocation(parameters map[string]any) *time.Location {
+	timezone := "Europe/Zurich"
+	if value, ok := parameters["cassandra_timezone"].(string); ok && strings.TrimSpace(value) != "" {
+		timezone = value
+	}
+	location, err := timeexpr.LoadLocation(timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return location
 }
 
 func deliveryStartFromCassandra(row map[string]any) time.Time {

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"streaming-golang/internal/app/transactional"
 )
@@ -95,10 +96,11 @@ func TestTransactionalStreamingNegotiatesNDJSON(t *testing.T) {
 }
 
 func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
+	zurich := time.FixedZone("CEST", 2*60*60)
 	stream := &csvTestStream{items: []transactional.DataItem{
-		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 1.1}},
-		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 2.2}},
-		{ID: 536013751, Fields: map[string]any{"ReferenceTime": "2024-04-26T00:00:00Z", "Value": 3.3}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": time.Date(2024, 4, 26, 0, 0, 0, 0, zurich), "Value": 1.1}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": time.Date(2024, 4, 26, 0, 0, 0, 0, zurich), "Value": 2.2}},
+		{ID: 536013751, Fields: map[string]any{"ReferenceTime": time.Date(2024, 4, 26, 0, 0, 0, 0, zurich), "Value": 3.3}},
 	}}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/curves/streaming", nil)
 	rec := httptest.NewRecorder()
@@ -116,6 +118,10 @@ func TestTransactionalJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 	}
 	if got := batches[0]["Identifier"]; got != float64(536013751) {
 		t.Fatalf("Identifier = %#v, want 536013751", got)
+	}
+	referenceTimes, ok := batches[0]["ReferenceTime"].([]any)
+	if !ok || len(referenceTimes) != 2 || referenceTimes[0] != "2024-04-26T00:00:00.000+02:00" {
+		t.Fatalf("first batch ReferenceTime = %#v, want C# DateTimeOffset milliseconds", batches[0]["ReferenceTime"])
 	}
 	values, ok := batches[0]["Value"].([]any)
 	if !ok || len(values) != 2 {

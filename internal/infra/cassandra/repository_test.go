@@ -24,6 +24,7 @@ func TestMapCassandraRowKeepsCSharpContractColumnsWhenProjectionIsRequested(t *t
 		ID: 536013751,
 		Parameters: map[string]any{
 			"projection_columns": []string{"Value"},
+			"cassandra_timezone": "Europe/Zurich",
 		},
 	}
 
@@ -45,7 +46,11 @@ func TestMapCassandraRowKeepsCSharpContractColumnsWhenProjectionIsRequested(t *t
 	if fields["Identifier"] != int64(536013751) {
 		t.Fatalf("Identifier = %#v, want 536013751", fields["Identifier"])
 	}
-	if got, ok := fields["ReferenceTime"].(time.Time); !ok || !got.Equal(time.Date(2024, 4, 26, 0, 0, 0, 0, time.UTC)) {
-		t.Fatalf("ReferenceTime = %#v, want 2024-04-26T00:00:00Z", fields["ReferenceTime"])
+	got, ok := fields["ReferenceTime"].(time.Time)
+	if !ok {
+		t.Fatalf("ReferenceTime = %#v, want time.Time", fields["ReferenceTime"])
+	}
+	if got.Format(time.RFC3339) != "2024-04-26T00:00:00+02:00" {
+		t.Fatalf("ReferenceTime = %s, want 2024-04-26T00:00:00+02:00", got.Format(time.RFC3339))
 	}
 }

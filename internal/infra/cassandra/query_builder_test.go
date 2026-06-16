@@ -22,6 +22,7 @@ func TestCassandraQueryBuilderMatchesCSharpShape(t *testing.T) {
 			DataCategory: domain.Curves,
 			Source:       domain.SourceCassandra,
 			CassandraID:  "power:312091001",
+			Timezone:     "Europe/Zurich",
 		}},
 	}
 
@@ -41,6 +42,9 @@ func TestCassandraQueryBuilderMatchesCSharpShape(t *testing.T) {
 	wantArguments := []any{"power:312091001", []int{20250706, 20250707}}
 	if !reflect.DeepEqual(queries[0].Arguments, wantArguments) {
 		t.Fatalf("arguments = %#v, want %#v", queries[0].Arguments, wantArguments)
+	}
+	if got := queries[0].Parameters["cassandra_timezone"]; got != "Europe/Zurich" {
+		t.Fatalf("cassandra_timezone = %#v, want Europe/Zurich", got)
 	}
 }
 

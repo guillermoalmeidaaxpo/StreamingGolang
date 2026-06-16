@@ -562,6 +562,11 @@ Current behavior:
 - preserves the C# Cassandra curve response contract columns:
   `Identifier`, `ReferenceTime`, `DeliveryStart`, `DeliveryEnd`,
   `LegacyDeliveryBucketNumber`, `RelativeDeliveryPeriod`, and `Value`
+- emits Cassandra `ReferenceTime` as midnight in the Cassandra mapping timezone
+  such as `Europe/Zurich`, matching C# offset-bearing values instead of UTC
+  midnight
+- formats JSON/NDJSON timestamp values with C# `DateTimeOffset` millisecond
+  precision, for example `2024-04-26T00:00:00.000+02:00`
 - calculates `RelativeDeliveryPeriod` in the Go transformation layer for
   Cassandra streams and non-stream responses, even when the client projected a
   smaller set of columns

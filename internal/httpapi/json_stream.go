@@ -9,6 +9,7 @@ import (
 
 	"streaming-golang/internal/app/transactional"
 	"streaming-golang/internal/domain"
+	"streaming-golang/internal/domain/timeexpr"
 )
 
 const (
@@ -174,7 +175,7 @@ func (b *columnBatch) add(item transactional.DataItem) {
 		if _, ok := b.fields[key]; !ok {
 			b.fields[key] = make([]any, b.count)
 		}
-		b.fields[key] = append(b.fields[key], value)
+		b.fields[key] = append(b.fields[key], timeexpr.FormatResponseValue(value))
 		seen[key] = struct{}{}
 	}
 	for key := range b.fields {
