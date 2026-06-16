@@ -101,6 +101,7 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 		h.logPhase(r, "response written", writeStart,
 			slog.String("handler", "transactional_stream"),
 			slog.String("format", "ndjson"),
+			slog.Int("stream_batch_size", normalizeStreamFlushEvery(h.streamFlushEvery)),
 		)
 		return
 	}
@@ -111,6 +112,7 @@ func (h handlers) transactionalStream(w http.ResponseWriter, r *http.Request) {
 	h.logPhase(r, "response written", writeStart,
 		slog.String("handler", "transactional_stream"),
 		slog.String("format", "json_stream"),
+		slog.Int("stream_batch_size", normalizeStreamFlushEvery(h.streamFlushEvery)),
 	)
 }
 

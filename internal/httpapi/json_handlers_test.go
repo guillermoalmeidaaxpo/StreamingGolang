@@ -159,6 +159,14 @@ func TestTransactionalNDJSONStreamBatchesColumnWiseByFlushSize(t *testing.T) {
 			t.Fatalf("Value = %#v, want array", batch["Value"])
 		}
 	}
+	var firstBatch map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &firstBatch); err != nil {
+		t.Fatalf("decode first ndjson line: %v; line=%s", err, lines[0])
+	}
+	values := firstBatch["Value"].([]any)
+	if len(values) != 2 {
+		t.Fatalf("first ndjson batch Value length = %d, want 2; batch=%#v", len(values), firstBatch)
+	}
 }
 
 func TestTransactionalJSONStreamStartsNewBatchWhenIdentifierChanges(t *testing.T) {

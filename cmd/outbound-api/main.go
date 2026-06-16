@@ -176,6 +176,7 @@ func logStartupConfiguration(logger *slog.Logger, cfg config.Config) {
 		slog.String("stage", cfg.Build.Stage),
 		slog.String("outbound_env", os.Getenv("OUTBOUND_ENV")),
 		slog.String("outbound_config_dir", os.Getenv("OUTBOUND_CONFIG_DIR")),
+		slog.Int("stream_batch_size", cfg.Stream.BatchStreamSize),
 	)
 
 	logSQLDatastore(logger, "cmdp_sql", cfg.ConnectionStrings.CmdpSQLDatabase)
